@@ -8,7 +8,7 @@ pipeline {
       steps {
         echo 'Prepare build env...'
 	sh 'git submodule update --init'
-	sh './scripts/pkgdep.sh'
+	sh 'sudo ./scripts/pkgdep.sh'
       }
     }
     stage('Build') {

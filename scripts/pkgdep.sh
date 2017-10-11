@@ -1,6 +1,6 @@
 #!/bin/sh
 # Please run this script as root.
-
+set -e
 SYSTEM=`uname -s`
 
 if [ -s /etc/redhat-release ]; then
