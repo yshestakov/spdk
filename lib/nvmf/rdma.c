@@ -2352,8 +2352,9 @@ spdk_nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 	case IBV_EVENT_PATH_MIG_ERR:
 		rqpair = event.element.qp->qp_context;
 		spdk_trace_record(TRACE_RDMA_IBV_ASYNC_EVENT, 0, 0,
-				  (uintptr_t)rqpair->cm_id, event.event_type);
-		spdk_nvmf_rdma_update_ibv_state(rqpair);
+				  rqpair ? (uintptr_t)rqpair->cm_id : 0, event.event_type);
+		if (rqpair)
+            spdk_nvmf_rdma_update_ibv_state(rqpair);
 		break;
 	case IBV_EVENT_CQ_ERR:
 	case IBV_EVENT_DEVICE_FATAL:
