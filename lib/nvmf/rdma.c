@@ -516,6 +516,7 @@ spdk_nvmf_rdma_request_set_state(struct spdk_nvmf_rdma_request *rdma_req,
 	rqpair->state_cntr[rdma_req->state]--;
 
 	rdma_req->state = state;
+    assert(state < RDMA_REQUEST_NUM_STATES);
 
 	TAILQ_INSERT_TAIL(&rqpair->state_queue[rdma_req->state], rdma_req, state_link);
 	rqpair->state_cntr[rdma_req->state]++;
