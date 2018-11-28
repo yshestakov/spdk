@@ -80,6 +80,7 @@ Requires:	libibverbs >= 20.0-3.el7
 Requires:	librdmacm  >= 20.0-3.el7
 Requires:	python, sg3_utils
 Requires:	avahi
+Requires:   libhugetlbfs-utils
 
 %description
 The Storage Performance Development Kit (SPDK) provides a set of tools and

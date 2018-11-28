@@ -5,10 +5,7 @@ Requires=network.target
 [Service]
 ExecStartPre=/usr/sbin/setup_hugepages.sh
 ExecStartPre=/usr/sbin/setup_nvmf_tgt.py -c
-# DPDK master lcore: -p c9
-# SPDK/DPDK reactor mask: -m 15
-# ExecStart=/usr/sbin/nvmf_tgt -m 0xfffe -c /etc/spdk/nvmf_tgt.conf -r 0.0.0.0
-ExecStart=/usr/sbin/nvmf_tgt -m 0x01fe -c /etc/spdk/nvmf_tgt.conf -r 0.0.0.0
+ExecStart=/usr/sbin/nvmf_tgt -m 0x0f0 -c /etc/spdk/nvmf_tgt.conf -r 0.0.0.0
 ExecStopPost=/usr/sbin/setup_nvmf_tgt.py -r
 # Restart=on-failure
 User=root
