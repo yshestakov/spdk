@@ -3,10 +3,11 @@ Description=SPKD NVMf target
 Requires=network.target
 
 [Service]
+EnvironmentFile=/etc/default/nvmf_tgt
 ExecStartPre=/usr/sbin/setup_hugepages.sh
-ExecStartPre=/usr/sbin/setup_nvmf_tgt.py -c
-ExecStart=/usr/sbin/nvmf_tgt -m 0x0f0 -c /etc/spdk/nvmf_tgt.conf -r 0.0.0.0
-ExecStopPost=/usr/sbin/setup_nvmf_tgt.py -r
+ExecStartPre=/usr/sbin/setup_nvmf_tgt.py -c -f $NVMF_TGT_CONF
+ExecStart=/usr/sbin/nvmf_tgt -m $CPU_MASK -c $NVMF_TGT_CONF $EXTRA_ARGS
+ExecStopPost=/usr/sbin/setup_nvmf_tgt.py -r -f $NVMF_TGT_CONF
 # Restart=on-failure
 User=root
 #RuntimeDirectory=/tmp

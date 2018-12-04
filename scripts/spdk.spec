@@ -115,12 +115,16 @@ install -p -m 755 examples/nvme/perf/perf %{buildroot}/%{_bindir}/nvme-perf
 install -p -m 755 contrib/setup_nvmf_tgt.py %{buildroot}/%{_sbindir}
 install -p -m 755 contrib/setup_hugepages.sh %{buildroot}/%{_sbindir}
 if [ -e contrib/nvmf_tgt.service ] ; then
-  mkdir -p %{buildroot}/etc/systemd/system
-  install -p -m 644 contrib/nvmf_tgt.service %{buildroot}/etc/systemd/system
+  mkdir -p %{buildroot}%{_sysconfdir}/systemd/system
+  install -p -m 644 contrib/nvmf_tgt.service %{buildroot}%{_sysconfdir}/systemd/system
+fi
+if [ -e contrib/nvmf_tgt-default ] ; then
+  mkdir -p %{buildroot}%{_sysconfdir}/default
+  install -p -m 644 contrib/nvmf_tgt-default %{buildroot}%{_sysconfdir}/default/nvmf_tgt
 fi
 if [ -e contrib/nvmf_tgt.conf.example ] ; then
-  mkdir -p %{buildroot}/etc/spdk
-  install -p -m 644 contrib/nvmf_tgt.conf.example %{buildroot}/etc/spdk/nvmf_tgt.conf
+  mkdir -p %{buildroot}%{_sysconfdir}/spdk
+  install -p -m 644 contrib/nvmf_tgt.conf.example %{buildroot}%{_sysconfdir}/spdk/nvmf_tgt.conf
 fi
 # Install SPDK rpc services
 mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
@@ -135,7 +139,8 @@ install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
 %{_sysconfdir}/systemd/system/nvmf_tgt.service
 # %{_sysconfdir}/avahi/services/spdk.service
 %{_libdir}/python2.7/site-packages/rpc/
-%config(noreplace) %{_sysconfdir}/*
+%config(noreplace) %{_sysconfdir}/default/nvmf_tgt
+%config(noreplace) %{_sysconfdir}/spdk/*
 %doc README.md LICENSE
 
 %post
