@@ -1,6 +1,10 @@
 # Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
 
+<<<<<<< HEAD
 %define scm_version 20.01
+=======
+%define scm_version 19.07
+>>>>>>> spdk.spec: add mlnx specific files to the rpm
 %define unmangled_version %{scm_version}
 %if "%{?_rev:1}" == ""
 %define scm_rev 1
@@ -31,7 +35,11 @@ Source4:	spdk-ocf-%{version}.tar.gz
 %define install_docdir %{buildroot}/%{_docdir}/%{name}
 
 # Distros that don't support python3 will use python2
+<<<<<<< HEAD
 %if "%{dist}" == ".el7" || "%{dist}" == ".el7.centos" || "%{dist}" == ".el7.centos.a"
+=======
+%if "%{dist}" == ".el7" || "%{dist}" == ".el7.centos"
+>>>>>>> spdk.spec: add mlnx specific files to the rpm
 %define use_python2 1
 %else
 %define use_python2 0
