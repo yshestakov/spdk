@@ -1,0 +1,20 @@
+# NVMf Target Configuration File
+# Define NVMf protocol global options
+
+[Transport]
+  Type RDMA
+  MaxQueueDepth 256
+  # number of queues in emulation configuration (JSON file) plus 2
+  MaxQueuesPerSession 34
+
+#[Transport]
+#  Type TCP
+
+[Nvme]
+  RetryCount 4
+  Timeout 0
+  ActionOnTimeout None
+  AdminPollRate 100000
+  # BlockSize 4096
+  #HotplugEnable Yes
+
