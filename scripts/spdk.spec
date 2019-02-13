@@ -74,12 +74,12 @@ BuildRequires:	libibverbs-devel, librdmacm-devel
 %endif
 
 # SPDK runtime dependencies
-# Requires:	libibverbs >= 41mlnx1-OFED.4.3
-# Requires:	librdmacm  >= 41mlnx1-OFED.4.2
-Requires:	libibverbs >= 20.0-3.el7
-Requires:	librdmacm  >= 20.0-3.el7
+Requires:	libibverbs >= 41mlnx1-OFED.4.4
+Requires:	librdmacm  >= 41mlnx1-OFED.4.2
+# Requires:	libibverbs >= 20.0-3.el7
+# Requires:	librdmacm  >= 20.0-3.el7
 Requires:	python, sg3_utils
-Requires:	avahi
+# Requires:	avahi
 Requires:   libhugetlbfs-utils
 
 %description

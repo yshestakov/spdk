@@ -1,4 +1,5 @@
 #!/bin/bash
+args="$@"
 wd=$(dirname $0)
 wdir=$(dirname $wd)
 cd $wdir
@@ -12,6 +13,9 @@ sha1=$(git rev-parse HEAD |cut -c -8)
 
 git archive \
     --format=tar.gz --prefix=spdk-$VER/ -o ~/rpmbuild/SOURCES/spdk-$VER.tar.gz  HEAD
+echo ***********
+ls -l ~/rpmbuild/SOURCES/spdk-$VER.tar.gz
+echo ***********
 git submodule init
 git submodule update
 (cd dpdk;
@@ -37,13 +41,13 @@ fakeroot  \
   rpmbuild -bs \
     -D "_version ${VER}" -D "_rev ${BUILD_NUMBER:-1}" \
     --define "_branch ${branch}" \
-    --define "_sha1 ${sha1}" \
-    scripts/spdk.spec
+    --define "_sha1 ${sha1}" $args \
+    scripts/spdk.spec 
 
 rpmbuild -bb \
     -D "_version ${VER}" -D "_rev ${BUILD_NUMBER:-1}" \
     --define "_branch ${branch}" \
-    --define "_sha1 ${sha1}" \
+    --define "_sha1 ${sha1}" $args \
     scripts/spdk.spec
 
 
