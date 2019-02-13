@@ -1,0 +1,34 @@
+# NVMf Target Configuration File
+# Define NVMf protocol global options
+
+[Nvmf]
+  # MaxQueueDepth 12 -> Invalid SQSIZE=31 (min 1 .. max 11)
+  # MaxQueueDepth 32 -> works until nvme_ctrlr.c: 276:spdk_nvme_ctrlr_alloc_io_qpair: *ERROR*: No free I/O queue IDs
+  MaxQueueDepth 256
+  # MaxQueuesPerSession 8
+  MaxQueuesPerSession 32
+  AcceptorPollRate 10000
+  # AcceptorCore 0
+
+[Nvme]
+  RetryCount 4
+  Timeout 0
+  ActionOnTimeout None
+  AdminPollRate 100000
+  # BlockSize 4096
+  #HotplugEnable Yes
+  #TransportId "trtype:PCIe traddr:0000:06:00.0" Nvme0
+  #TransportId "trtype:PCIe traddr:0000:08:00.0" Nvme1
+  #TransportId "trtype:PCIe traddr:0000:0a:00.0" Nvme2
+  ##TransportId "trtype:PCIe traddr:0000:0c:00.0" Nvme3
+
+#[Subsystem0]
+#  NQN nqn.2016-06.io.spdk.swx-bw-03:nvme0
+#  SN SPDK000DEADBEAF00
+#  Namespace Nvme0n1p1 1
+#  Namespace Nvme1n1p1 2
+#  Namespace Nvme2n1p1 3
+#  #Namespace Nvme3n1 4
+#  Listen RDMA 11.210.8.34:1023
+#  Listen RDMA 11.212.79.34:1023
+#  AllowAnyHost yes
