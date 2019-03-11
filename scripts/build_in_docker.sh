@@ -1,8 +1,8 @@
 #!/bin/bash
+# --user $UID \
 docker run  \
- --user $UID \
     --name build-spdk01 \
-    -e "VER=18.10" -e "BUILD_NUMBER=5" \
+    -e "VER=19.02" -e "BUILD_NUMBER=2" \
     -v ~/rpmbuild:/rpmbuild \
     -v `pwd`:/scratch         \
     --rm -i         \
