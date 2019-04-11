@@ -1,7 +1,6 @@
 # Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
 
 %if "%{?_version:1}" == ""
-	# %define scm_version %(echo "$(./scripts/get_ver.sh)" )
 	%define scm_version 19.03
 	%define unmangled_version %{scm_version}
 %else
@@ -9,7 +8,7 @@
 	%define unmangled_version %{_version}
 %endif
 %if "%{?_rev:1}" == ""
-	%define scm_rev 1
+	%define scm_rev 3
 %else
 	%define scm_rev %{_rev}
 %endif
@@ -78,8 +77,10 @@ BuildRequires:	libibverbs-devel, librdmacm-devel
 # SPDK runtime dependencies
 #Requires:	libibverbs >= 41mlnx1-OFED.4.4
 #Requires:	librdmacm  >= 41mlnx1-OFED.4.2
-Requires:	libibverbs >= 23.0-1.el7
-Requires:	librdmacm  >= 23.0-1.el7
+#Requires:	libibverbs >= 23.0-1.el7
+#Requires:	librdmacm  >= 23.0-1.el7
+Requires:	libibverbs
+Requires:	librdmacm 
 Requires:	python, sg3_utils
 # Requires:	avahi
 Requires:   libhugetlbfs-utils
@@ -89,11 +90,14 @@ The Storage Performance Development Kit (SPDK) provides a set of tools and
 libraries for writing high performance, scalable, user-mode storage
 applications.
 
+%global debug_package %{nil}
+
 %prep
 %setup -q
 tar zxf %{SOURCE1}
 tar zxf %{SOURCE2}
 tar zxf %{SOURCE3}
+tar zxf %{SOURCE4}
 # test -e ./dpdk/config/common_linuxapp
 
 %build
@@ -116,33 +120,39 @@ install -p -m 755 app/iscsi_top/iscsi_top %{buildroot}/%{_bindir}
 install -p -m 755 app/trace/spdk_trace %{buildroot}/%{_bindir}
 install -p -m 755 examples/nvme/perf/perf %{buildroot}/%{_bindir}/nvme-perf
 install -p -m 755 contrib/setup_nvmf_tgt.py %{buildroot}/%{_sbindir}
+install -p -m 755 contrib/setup_vhost.py %{buildroot}/%{_sbindir}
+install -p -m 755 contrib/vhost_add_config.sh %{buildroot}/%{_sbindir}
 install -p -m 755 contrib/setup_hugepages.sh %{buildroot}/%{_sbindir}
-if [ -e contrib/nvmf_tgt.service ] ; then
-  mkdir -p %{buildroot}%{_sysconfdir}/systemd/system
-  install -p -m 644 contrib/nvmf_tgt.service %{buildroot}%{_sysconfdir}/systemd/system
-fi
-if [ -e contrib/nvmf_tgt-default ] ; then
-  mkdir -p %{buildroot}%{_sysconfdir}/default
-  install -p -m 644 contrib/nvmf_tgt-default %{buildroot}%{_sysconfdir}/default/nvmf_tgt
-fi
-if [ -e contrib/nvmf_tgt.conf.example ] ; then
-  mkdir -p %{buildroot}%{_sysconfdir}/spdk
-  install -p -m 644 contrib/nvmf_tgt.conf.example %{buildroot}%{_sysconfdir}/spdk/nvmf_tgt.conf
-fi
+mkdir -p %{buildroot}%{_sysconfdir}/systemd/system
+mkdir -p %{buildroot}%{_sysconfdir}/default
+mkdir -p %{buildroot}%{_sysconfdir}/spdk
+for fn in nvmf_tgt vhost ; do
+  if [ -e contrib/$fn.service ] ; then
+    install -p -m 644 contrib/$fn.service %{buildroot}%{_sysconfdir}/systemd/system
+  fi
+  if [ -e contrib/$fn-default ] ; then
+    install -p -m 644 contrib/$fn-default %{buildroot}%{_sysconfdir}/default/$fn
+  fi
+  if [ -e contrib/$fn.conf.example ] ; then
+    install -p -m 644 contrib/$fn.conf.example %{buildroot}%{_sysconfdir}/spdk/
+  fi
+done
 # Install SPDK rpc services
 mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
+mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
 install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
+install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
 install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
-#mkdir -p %{buildroot}/%{_sysconfdir}/avahi/services/
-#install -p -m 644 contrib/avahi-spdk.service %{buildroot}/%{_sysconfdir}/avahi/services/spdk.service
+# mkdir -p %{buildroot}/%{_sysconfdir}/avahi/services/
+# install -p -m 644 contrib/avahi-spdk.service %{buildroot}/%{_sysconfdir}/avahi/services/spdk.service
 
 %files
 %{_sbindir}/*
 %{_bindir}/*
-%{_sysconfdir}/systemd/system/nvmf_tgt.service
-# %{_sysconfdir}/avahi/services/spdk.service
+%{_sysconfdir}/systemd/system/*.service
 %{_libdir}/python2.7/site-packages/rpc/
-%config(noreplace) %{_sysconfdir}/default/nvmf_tgt
+%{_libdir}/python3.7/site-packages/rpc/
+%config(noreplace) %{_sysconfdir}/default/*
 %config(noreplace) %{_sysconfdir}/spdk/*
 %doc README.md LICENSE
 
@@ -159,6 +169,10 @@ case "$1" in
 esac
 
 %changelog
+* Thu Apr 11 2019 Yuriy Shestakov <yuriis@mellanox.com>
+- added vhost config/service definition
+- packaged v19.04-pre
+
 * Fri Nov 16 2018 Yuriy Shestakov <yuriis@mellanox.com>
 - build in a Docker image with upstream rdma-core libs
 - packaged v18.10
