@@ -7,6 +7,7 @@
 	%define scm_version %{_version}
 	%define unmangled_version %{_version}
 %endif
+%if "%{?_rev:1}" == ""
 	%define scm_rev 3
 %else
 	%define scm_rev %{_rev}
