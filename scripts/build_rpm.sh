@@ -51,6 +51,12 @@ fakeroot  \
 
 chown 0.0  ~/rpmbuild/SOURCES/spdk-*-$VER.tar.gz
 ls -l ~/rpmbuild/SOURCES/*
+# just a workaround for missed *-source repos:
+fgrep -l vault.centos /etc/yum.repos.d/*.repo |while read fn ; do mv $fn /tmp/ ; done
+#--disablerepo=extras-source --disablerepo=centosplus-source \
+#--disablerepo=base-source \
+#
+yum-builddep -y scripts/spdk.spec
 rpmbuild -bb \
     -D "_version ${VER}" -D "_rev ${BUILD_NUMBER:-1}" \
     --define "_branch ${branch}" \
