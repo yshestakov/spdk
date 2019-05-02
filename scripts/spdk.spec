@@ -1,22 +1,13 @@
 # Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
 
 %if "%{?_version:1}" == ""
-<<<<<<< HEAD
-=======
-	# %define scm_version %(echo "$(./scripts/get_ver.sh)" )
->>>>>>> ab5804e8dacd9cd255f9f5e169556076399a51aa
 	%define scm_version 19.03
 	%define unmangled_version %{scm_version}
 %else
 	%define scm_version %{_version}
 	%define unmangled_version %{_version}
 %endif
-%if "%{?_rev:1}" == ""
-<<<<<<< HEAD
 	%define scm_rev 3
-=======
-	%define scm_rev 1
->>>>>>> ab5804e8dacd9cd255f9f5e169556076399a51aa
 %else
 	%define scm_rev %{_rev}
 %endif
