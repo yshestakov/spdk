@@ -138,10 +138,14 @@ for fn in nvmf_tgt vhost ; do
   fi
 done
 # Install SPDK rpc services
-mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
-mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
-install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
-install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
+if [ -e %{_libdir}/python2.7 ] ; then
+  mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
+  install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
+fi
+if [ -e %{_libdir}/python3.7 ] ; then
+  mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
+  install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
+fi
 install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
 # mkdir -p %{buildroot}/%{_sysconfdir}/avahi/services/
 # install -p -m 644 contrib/avahi-spdk.service %{buildroot}/%{_sysconfdir}/avahi/services/spdk.service
@@ -150,8 +154,7 @@ install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
 %{_sbindir}/*
 %{_bindir}/*
 %{_sysconfdir}/systemd/system/*.service
-%{_libdir}/python2.7/site-packages/rpc/
-%{_libdir}/python3.7/site-packages/rpc/
+%{_libdir}/*
 %config(noreplace) %{_sysconfdir}/default/*
 %config(noreplace) %{_sysconfdir}/spdk/*
 %doc README.md LICENSE
