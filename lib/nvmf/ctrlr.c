@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -557,9 +557,16 @@ spdk_nvmf_ctrlr_connect(struct spdk_nvmf_request *req)
 
 	/*
 	 * SQSIZE is a 0-based value, so it must be at least 1 (minimum queue depth is 2) and
-	 *  strictly less than max_queue_depth.
+	 *  strictly less than max_aq_depth (admin queues) or max_queue_depth (io queues).
 	 */
-	if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_queue_depth) {
+	if (cmd->qid == 0) {
+		if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_aq_depth) {
+			SPDK_ERRLOG("Invalid SQSIZE for admin queue %u (min 1, max %u)\n",
+				    cmd->sqsize, qpair->transport->opts.max_aq_depth - 1);
+			SPDK_NVMF_INVALID_CONNECT_CMD(rsp, sqsize);
+			return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
+		}
+	} else if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_queue_depth) {
 		SPDK_ERRLOG("Invalid SQSIZE %u (min 1, max %u)\n",
 			    cmd->sqsize, qpair->transport->opts.max_queue_depth - 1);
 		SPDK_NVMF_INVALID_CONNECT_CMD(rsp, sqsize);
