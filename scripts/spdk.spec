@@ -102,7 +102,7 @@ tar zxf %{SOURCE4}
 
 %build
 ./configure --with-rdma --without-pmdk \
-	--disable-coverage --disable-debug \
+	--disable-coverage --enable-debug \
 	--prefix=/usr
 # SPDK make
 make %{?_smp_mflags}
@@ -141,6 +141,8 @@ done
 if [ -e %{_libdir}/python2.7 ] ; then
   mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
   install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
+  install -p -m 755 scripts/rpc.py %{buildroot}/%{_bindir}/spdk_rpc.py
+  sed -i -e 's!/usr/bin/python3$!/usr/bin/python2!' %{buildroot}/%{_bindir}/spdk_rpc.py
 fi
 if [ -e %{_libdir}/python3.7 ] ; then
   mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/

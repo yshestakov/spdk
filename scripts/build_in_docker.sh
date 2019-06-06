@@ -3,7 +3,7 @@
 # centos75-spdk -> centos75-mofed46
 docker run  \
     --name build-spdk01 \
-    -e "VER=19.04" -e "BUILD_NUMBER=1" \
+    -e "VER=19.04" -e "BUILD_NUMBER=2" \
     -v ~/rpmbuild:/rpmbuild \
     -v `pwd`:/scratch         \
     --rm -i         \
