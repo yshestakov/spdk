@@ -1,24 +1,13 @@
 # Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
 
-%if "%{?_version:1}" == ""
-	%define scm_version 19.04.1
-	%define unmangled_version %{scm_version}
-%else
-	%define scm_version %{_version}
-	%define unmangled_version %{_version}
-%endif
+%define scm_version 19.04.1
+%define unmangled_version %{scm_version}
 %if "%{?_rev:1}" == ""
-	%define scm_rev 1
+%define scm_rev 1
 %else
-	%define scm_rev %{_rev}
+%define scm_rev %{_rev}
 %endif
-
-%if "%{?_sha1:1}" == ""
-	%define _sha1 ""
-%endif
-%if "%{?_branch:1}" == ""
-	%define _branch ""
-%endif
+Epoch: 0
 
 Name:		spdk
 Version:	%{scm_version}
@@ -35,13 +24,14 @@ Source2:	spdk-intel-ipsec-mb-%{version}.tar.gz
 Source3:	spdk-isa-l-%{version}.tar.gz
 Source4:	spdk-ocf-%{version}.tar.gz
 
+%define package_version %{epoch}:%{version}-%{release}
 %define install_datadir %{buildroot}/%{_datadir}/%{name}
 %define install_sbindir %{buildroot}/%{_sbindir}
 %define install_bindir %{buildroot}/%{_bindir}
 %define install_docdir %{buildroot}/%{_docdir}/%{name}
 
 # Distros that don't support python3 will use python2
-%if "%{dist}" == ".el7"
+%if "%{dist}" == ".el7" || "%{dist}" == ".el7.centos"
 %define use_python2 1
 %else
 %define use_python2 0
@@ -178,9 +168,10 @@ for fn in nvmf_tgt vhost nvmf_proxy ; do
 done
 # Install SPDK rpc services
 %if "%{use_python2}" == "0"
-if [ -e %{_libdir}/python3.7 ] ; then
-  mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
-fi
+  if [ -e %{_libdir}/python3.7 ] ; then
+    mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
+    install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
+  fi
   install -p -m 755 scripts/rpc.py %{install_bindir}/spdk_rpc.py
 %else
   mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
@@ -197,8 +188,6 @@ fi
 %{_sysconfdir}/systemd/system/*.service
 %{_libdir}/*
 %{_datadir}/*
-# %{_libdir}/python2.7/site-packages/rpc/
-# %{_libdir}/python3.7/site-packages/rpc/
 %config(noreplace) %{_sysconfdir}/default/*
 %config(noreplace) %{_sysconfdir}/spdk/*
 %doc README.md LICENSE
@@ -216,6 +205,9 @@ case "$1" in
 esac
 
 %changelog
+* Mon Jul 15 2019 Yuriy Shestakov <yuriis@mellanox.com>
+- ported to v19.04.1 release
+
 * Thu May  2 2019 Yuriy Shestakov <yuriis@mellanox.com>
 - ported to v19.04 release
 
