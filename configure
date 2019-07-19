@@ -513,6 +513,15 @@ of libibverbs, so Linux kernel NVMe-oF initiators based on kernels greater
 than or equal to 4.14 will see significantly reduced performance.
 *******************************************************************************"
 	fi
+	if echo -e '#include <infiniband/verbs_exp.h>\n' \
+		'int main(void) { return !!IBV_EXP_DEVICE_SIGNATURE_HANDOVER; }\n' \
+		| $BUILD_CMD -c - 2>/dev/null; then
+		CONFIG[RDMA_SIG_OFFLOAD]="y"
+		echo "Signature offload is enabled for NVMf RDMA transport"
+	else
+		CONFIG[RDMA_SIG_OFFLOAD]="n"
+		echo "Signature offload is disabled for NVMf RDMA transport"
+	fi
 fi
 
 if [[ "${CONFIG[FC]}" = "y" ]]; then

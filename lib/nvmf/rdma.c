@@ -34,6 +34,9 @@
 #include "spdk/stdinc.h"
 
 #include <infiniband/verbs.h>
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+#include <infiniband/verbs_exp.h>
+#endif
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 
@@ -464,6 +467,9 @@ struct spdk_nvmf_rdma_poll_group {
 struct spdk_nvmf_rdma_device {
 	struct ibv_device_attr			attr;
 	struct ibv_context			*context;
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	struct ibv_exp_device_attr		exp_attr;
+#endif
 
 	struct spdk_mem_map			*map;
 	struct ibv_pd				*pd;
@@ -2193,7 +2199,29 @@ spdk_nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 			break;
 
 		}
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+		device->exp_attr.comp_mask = IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
+		device->exp_attr.comp_mask_2 = IBV_EXP_DEVICE_ATTR_SIG_CAPS;
+		rc = ibv_exp_query_device(device->context, &device->exp_attr);
+		if (rc < 0) {
+			SPDK_ERRLOG("Failed to query experimental RDMA device attributes.\n");
+			free(device);
+			break;
 
+		}
+		if (device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) {
+			SPDK_NOTICELOG("Device %s supports signature offload, "
+				       "flags 0x%lX, prot_cap 0x%X, guard_cap 0x%X\n",
+				       ibv_get_device_name(device->context->device),
+				       device->exp_attr.exp_device_cap_flags,
+				       device->exp_attr.sig_caps.prot_cap,
+				       device->exp_attr.sig_caps.guard_cap);
+		} else {
+			SPDK_NOTICELOG("Device %s does not support signature offload, flags %lx\n",
+				       ibv_get_device_name(device->context->device),
+				       device->exp_attr.exp_device_cap_flags);
+		}
+#endif
 		max_device_sge = spdk_min(max_device_sge, device->attr.max_sge);
 
 #ifdef SPDK_CONFIG_RDMA_SEND_WITH_INVAL
