@@ -340,6 +340,7 @@ struct spdk_nvmf_rdma_qpair {
 	struct spdk_nvmf_rdma_port		*port;
 	struct spdk_nvmf_rdma_poller		*poller;
 
+	struct ibv_qp				*qp;
 	struct rdma_cm_id			*cm_id;
 	struct ibv_srq				*srq;
 	struct rdma_cm_id			*listen_id;
@@ -529,7 +530,7 @@ spdk_nvmf_rdma_update_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair) {
 	int rc;
 
 	old_state = rqpair->ibv_state;
-	rc = ibv_query_qp(rqpair->cm_id->qp, &qp_attr,
+	rc = ibv_query_qp(rqpair->qp, &qp_attr,
 			  g_spdk_nvmf_ibv_query_mask, &init_attr);
 
 	if (rc)
@@ -611,7 +612,7 @@ spdk_nvmf_rdma_set_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair,
 		return rc;
 	}
 
-	rc = ibv_query_qp(rqpair->cm_id->qp, &qp_attr,
+	rc = ibv_query_qp(rqpair->qp, &qp_attr,
 			  g_spdk_nvmf_ibv_query_mask, &init_attr);
 
 	if (rc) {
@@ -622,7 +623,7 @@ spdk_nvmf_rdma_set_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair,
 	qp_attr.cur_qp_state = rqpair->ibv_state;
 	qp_attr.qp_state = new_state;
 
-	rc = ibv_modify_qp(rqpair->cm_id->qp, &qp_attr,
+	rc = ibv_modify_qp(rqpair->qp, &qp_attr,
 			   attr_mask_rc[new_state]);
 
 	if (rc) {
@@ -910,6 +911,9 @@ spdk_nvmf_rdma_qpair_destroy(struct spdk_nvmf_rdma_qpair *rqpair)
 	if (rqpair->cm_id) {
 		if (rqpair->cm_id->qp != NULL) {
 			rdma_destroy_qp(rqpair->cm_id);
+		} else if (rqpair->qp != NULL) {
+			/* QP was created with ibv_exp_create_qp */
+			ibv_destroy_qp(rqpair->qp);
 		}
 		rdma_destroy_id(rqpair->cm_id);
 
@@ -961,18 +965,71 @@ nvmf_rdma_resize_cq(struct spdk_nvmf_rdma_qpair *rqpair, struct spdk_nvmf_rdma_d
 	return 0;
 }
 
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 static int
-spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
+spdk_nvmf_rdma_create_qp(struct spdk_nvmf_rdma_qpair *rqpair)
 {
-	struct spdk_nvmf_rdma_qpair		*rqpair;
-	int					rc;
-	struct spdk_nvmf_rdma_transport		*rtransport;
-	struct spdk_nvmf_transport		*transport;
-	struct spdk_nvmf_rdma_resource_opts	opts;
-	struct spdk_nvmf_rdma_device		*device;
-	struct ibv_qp_init_attr			ibv_init_attr;
+	struct spdk_nvmf_rdma_device *device;
+	struct ibv_exp_qp_init_attr ibv_init_attr = {};
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	device = rqpair->port->device;
+
+	ibv_init_attr.qp_context	= rqpair;
+	ibv_init_attr.qp_type		= IBV_QPT_RC;
+	ibv_init_attr.send_cq		= rqpair->poller->cq;
+	ibv_init_attr.recv_cq		= rqpair->poller->cq;
+
+	if (rqpair->srq) {
+		ibv_init_attr.srq		= rqpair->srq;
+	} else {
+		ibv_init_attr.cap.max_recv_wr	= rqpair->max_queue_depth +
+						  1; /* RECV operations + dummy drain WR */
+	}
+
+	ibv_init_attr.cap.max_send_wr	= rqpair->max_queue_depth *
+					  2 + 1; /* SEND, READ, and WRITE operations + dummy drain WR */
+	ibv_init_attr.cap.max_send_sge	= spdk_min(device->attr.max_sge, NVMF_DEFAULT_TX_SGE);
+	ibv_init_attr.cap.max_recv_sge	= spdk_min(device->attr.max_sge, NVMF_DEFAULT_RX_SGE);
+
+	if (rqpair->srq == NULL && nvmf_rdma_resize_cq(rqpair, device) < 0) {
+		SPDK_ERRLOG("Failed to resize the completion queue. Cannot initialize qpair.\n");
+		return -1;
+	}
+
+	ibv_init_attr.pd = device->pd;
+	ibv_init_attr.comp_mask |= IBV_QP_INIT_ATTR_PD;
+	/* Signature offload attributes */
+	if (device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) {
+		ibv_init_attr.exp_create_flags |= IBV_EXP_QP_CREATE_SIGNATURE_EN |
+			IBV_EXP_QP_CREATE_SIGNATURE_PIPELINE;
+		ibv_init_attr.comp_mask |= IBV_EXP_QP_INIT_ATTR_CREATE_FLAGS;
+	}
+
+	rqpair->qp = ibv_exp_create_qp(rqpair->cm_id->verbs, &ibv_init_attr);
+	if (NULL == rqpair->qp) {
+		SPDK_ERRLOG("ibv_exp_create_qp failed: errno %d: %s\n", errno, spdk_strerror(errno));
+		return -1;
+	}
+
+	SPDK_NOTICELOG("Experimental QP created: qp %p, cm_id %p, cm_id.pd %p, device.pd %p, sig_offload %d\n",
+		       rqpair->qp, rqpair->cm_id, rqpair->cm_id->pd, device->pd,
+		       !!(device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER));
+
+	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2 + 1),
+					  ibv_init_attr.cap.max_send_wr);
+	rqpair->max_send_sge = spdk_min(NVMF_DEFAULT_TX_SGE, ibv_init_attr.cap.max_send_sge);
+	rqpair->max_recv_sge = spdk_min(NVMF_DEFAULT_RX_SGE, ibv_init_attr.cap.max_recv_sge);
+	spdk_trace_record(TRACE_RDMA_QP_CREATE, 0, 0, (uintptr_t)rqpair->cm_id, 0);
+	return 0;
+}
+#else
+static int
+spdk_nvmf_rdma_create_qp(struct spdk_nvmf_rdma_qpair *rqpair)
+{
+	struct spdk_nvmf_rdma_device *device;
+	struct ibv_qp_init_attr ibv_init_attr;
+	int rc;
+
 	device = rqpair->port->device;
 
 	memset(&ibv_init_attr, 0, sizeof(struct ibv_qp_init_attr));
@@ -995,20 +1052,41 @@ spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 	if (rqpair->srq == NULL && nvmf_rdma_resize_cq(rqpair, device) < 0) {
 		SPDK_ERRLOG("Failed to resize the completion queue. Cannot initialize qpair.\n");
-		goto error;
+		return -1;
 	}
 
-	rc = rdma_create_qp(rqpair->cm_id, rqpair->port->device->pd, &ibv_init_attr);
+	rc = rdma_create_qp(rqpair->cm_id, device->pd, &ibv_init_attr);
 	if (rc) {
 		SPDK_ERRLOG("rdma_create_qp failed: errno %d: %s\n", errno, spdk_strerror(errno));
-		goto error;
+		return -1;
 	}
+
+	rqpair->qp = rqpair->cm_id->qp;
+	SPDK_NOTICELOG("RDMA CM QP created: qp %p, cm_id %p, cm_id.pd %p, device.pd %p\n",
+		       rqpair->qp, rqpair->cm_id, rqpair->cm_id->pd, device->pd);
 
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2 + 1),
 					  ibv_init_attr.cap.max_send_wr);
 	rqpair->max_send_sge = spdk_min(NVMF_DEFAULT_TX_SGE, ibv_init_attr.cap.max_send_sge);
 	rqpair->max_recv_sge = spdk_min(NVMF_DEFAULT_RX_SGE, ibv_init_attr.cap.max_recv_sge);
 	spdk_trace_record(TRACE_RDMA_QP_CREATE, 0, 0, (uintptr_t)rqpair->cm_id, 0);
+	return 0;
+}
+#endif
+
+static int
+spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_rdma_qpair		*rqpair;
+	struct spdk_nvmf_rdma_transport		*rtransport;
+	struct spdk_nvmf_transport		*transport;
+	struct spdk_nvmf_rdma_resource_opts	opts;
+
+	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+
+	if (0 != spdk_nvmf_rdma_create_qp(rqpair)) {
+		goto error;
+	}
 	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "New RDMA Connection: %p\n", qpair);
 
 	rqpair->sends_to_post.first = NULL;
@@ -1018,7 +1096,7 @@ spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 		rtransport = SPDK_CONTAINEROF(qpair->transport, struct spdk_nvmf_rdma_transport, transport);
 		transport = &rtransport->transport;
 
-		opts.qp = rqpair->cm_id->qp;
+		opts.qp = rqpair->qp;
 		opts.pd = rqpair->cm_id->pd;
 		opts.qpair = rqpair;
 		opts.shared = false;
@@ -1166,6 +1244,56 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	return 0;
 }
 
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+static int
+spdk_nvmf_rdma_activate_qp(struct spdk_nvmf_rdma_qpair *rqpair, struct rdma_cm_id *id)
+{
+	struct ibv_qp_attr qp_attr;
+	int qp_attr_mask, ret;
+
+	qp_attr.qp_state = IBV_QPS_INIT;
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on rdma_init_qp_attr\n", ret);
+		return ret;
+	}
+
+	ret = ibv_modify_qp(rqpair->qp, &qp_attr, qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on ibv_modify_qp\n", ret);
+		return ret;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTR;
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on rdma_init_qp_attr\n", ret);
+		return ret;
+	}
+
+	ret = ibv_modify_qp(rqpair->qp, &qp_attr, qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on ibv_modify_qp\n", ret);
+		return ret;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTS;
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on rdma_init_qp_attr\n", ret);
+		return ret;
+	}
+
+	ret = ibv_modify_qp(rqpair->qp, &qp_attr, qp_attr_mask);
+	if (ret) {
+		SPDK_ERRLOG("Error %d on ibv_modify_qp\n", ret);
+		return ret;
+	}
+
+	return ret;
+}
+#endif
+
 static int
 spdk_nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpair)
 {
@@ -1175,6 +1303,17 @@ spdk_nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *
 
 	accept_data.recfmt = 0;
 	accept_data.crqsize = rqpair->max_queue_depth;
+
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	rc = spdk_nvmf_rdma_activate_qp(rqpair, id);
+	if (rc) {
+		SPDK_ERRLOG("Failed to bring QP %p (%u) to RTS state\n",
+			    rqpair, rqpair->qpair.qid);
+		return rc;
+	}
+	ctrlr_event_data.qp_num = rqpair->qp->qp_num;
+	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
+#endif
 
 	ctrlr_event_data.private_data = &accept_data;
 	ctrlr_event_data.private_data_len = sizeof(accept_data);
@@ -3223,7 +3362,7 @@ get_rdma_qpair_from_wc(struct spdk_nvmf_rdma_poller *rpoller, struct ibv_wc *wc)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	/* @todo: improve QP search */
 	TAILQ_FOREACH(rqpair, &rpoller->qpairs, link) {
-		if (wc->qp_num == rqpair->cm_id->qp->qp_num) {
+		if (wc->qp_num == rqpair->qp->qp_num) {
 			return rqpair;
 		}
 	}
@@ -3291,7 +3430,7 @@ _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 		while (!STAILQ_EMPTY(&rpoller->qpairs_pending_recv)) {
 			rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_recv);
 			assert(rqpair->resources->recvs_to_post.first != NULL);
-			rc = ibv_post_recv(rqpair->cm_id->qp, rqpair->resources->recvs_to_post.first, &bad_recv_wr);
+			rc = ibv_post_recv(rqpair->qp, rqpair->resources->recvs_to_post.first, &bad_recv_wr);
 			if (rc) {
 				_qp_reset_failed_recvs(rqpair, bad_recv_wr, rc);
 			}
@@ -3374,7 +3513,7 @@ _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 	while (!STAILQ_EMPTY(&rpoller->qpairs_pending_send)) {
 		rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_send);
 		assert(rqpair->sends_to_post.first != NULL);
-		rc = ibv_post_send(rqpair->cm_id->qp, rqpair->sends_to_post.first, &bad_wr);
+		rc = ibv_post_send(rqpair->qp, rqpair->sends_to_post.first, &bad_wr);
 
 		/* bad wr always points to the first wr that failed. */
 		if (rc) {
