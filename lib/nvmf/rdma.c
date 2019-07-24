@@ -250,6 +250,9 @@ struct spdk_nvmf_rdma_request_data {
 	struct spdk_nvmf_rdma_wr	rdma_wr;
 	struct ibv_send_wr		wr;
 	struct ibv_sge			sgl[SPDK_NVMF_MAX_SGL_ENTRIES];
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	struct ibv_mr			*sig_mr;
+#endif
 };
 
 struct spdk_nvmf_rdma_request {
@@ -281,6 +284,7 @@ enum spdk_nvmf_rdma_qpair_disconnect_flags {
 
 struct spdk_nvmf_rdma_resource_opts {
 	struct spdk_nvmf_rdma_qpair	*qpair;
+	struct spdk_nvmf_rdma_device	*device;
 	/* qp points either to an ibv_qp object or an ibv_srq object depending on the value of shared. */
 	void				*qp;
 	struct ibv_pd			*pd;
@@ -332,6 +336,8 @@ struct spdk_nvmf_rdma_resources {
 
 	/* Queue to track free requests */
 	STAILQ_HEAD(, spdk_nvmf_rdma_request)	free_queue;
+
+	uint32_t				max_queue_depth;
 };
 
 struct spdk_nvmf_rdma_qpair {
@@ -696,6 +702,20 @@ nvmf_rdma_dump_qpair_contents(struct spdk_nvmf_rdma_qpair *rqpair)
 static void
 nvmf_rdma_resources_destroy(struct spdk_nvmf_rdma_resources *resources)
 {
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	struct spdk_nvmf_rdma_request *rdma_req;
+	uint32_t i;
+
+	for (i = 0; i < resources->max_queue_depth; i++) {
+		rdma_req = &resources->reqs[i];
+		if (rdma_req->data.sig_mr) {
+			ibv_dereg_mr(rdma_req->data.sig_mr);
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Destroyed Signature offload MR #%u: %p\n",
+				      i, rdma_req->data.sig_mr);
+		}
+	}
+#endif
+
 	if (resources->cmds_mr) {
 		ibv_dereg_mr(resources->cmds_mr);
 	}
@@ -733,6 +753,8 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		SPDK_ERRLOG("Unable to allocate resources for receive queue.\n");
 		return NULL;
 	}
+
+	resources->max_queue_depth = opts->max_queue_depth;
 
 	resources->reqs = calloc(opts->max_queue_depth, sizeof(*resources->reqs));
 	resources->recvs = calloc(opts->max_queue_depth, sizeof(*resources->recvs));
@@ -860,6 +882,24 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		rdma_req->data.wr.send_flags = IBV_SEND_SIGNALED;
 		rdma_req->data.wr.sg_list = rdma_req->data.sgl;
 		rdma_req->data.wr.num_sge = SPDK_COUNTOF(rdma_req->data.sgl);
+
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+		if (opts->device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) {
+			struct ibv_exp_create_mr_in sig_mr_in = {};
+
+			sig_mr_in.pd = opts->pd;
+			sig_mr_in.attr.max_klm_list_size = 1;
+			sig_mr_in.attr.create_flags = IBV_EXP_MR_SIGNATURE_EN;
+			sig_mr_in.attr.exp_access_flags = IBV_ACCESS_LOCAL_WRITE;
+			rdma_req->data.sig_mr = ibv_exp_create_mr(&sig_mr_in);
+			if (!rdma_req->data.sig_mr) {
+				SPDK_ERRLOG("Failed to create Signature offload MR, error %d\n", errno);
+				goto cleanup;
+			}
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Created Signature offload MR #%u: %p\n",
+				      i, rdma_req->data.sig_mr);
+		}
+#endif
 
 		/* Initialize request state to FREE */
 		rdma_req->state = RDMA_REQUEST_STATE_FREE;
@@ -1099,6 +1139,7 @@ spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 		opts.qp = rqpair->qp;
 		opts.pd = rqpair->cm_id->pd;
 		opts.qpair = rqpair;
+		opts.device = rqpair->poller->device;
 		opts.shared = false;
 		opts.max_queue_depth = rqpair->max_queue_depth;
 		opts.in_capsule_data_size = transport->opts.in_capsule_data_size;
@@ -3141,6 +3182,7 @@ spdk_nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport)
 			opts.qp = poller->srq;
 			opts.pd = device->pd;
 			opts.qpair = NULL;
+			opts.device = device;
 			opts.shared = true;
 			opts.max_queue_depth = poller->max_srq_depth;
 			opts.in_capsule_data_size = transport->opts.in_capsule_data_size;
