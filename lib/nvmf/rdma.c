@@ -1014,7 +1014,6 @@ spdk_nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 error:
 	rdma_destroy_id(rqpair->cm_id);
 	rqpair->cm_id = NULL;
-	spdk_nvmf_rdma_qpair_destroy(rqpair);
 	return -1;
 }
 
@@ -1613,6 +1612,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 
 	/* The first WR must always be the embedded data WR. This is how we unwind them later. */
 	current_wr = &rdma_req->data.wr;
+	assert(current_wr != NULL);
 
 	req->iovcnt = 0;
 	desc = (struct spdk_nvme_sgl_descriptor *)rdma_req->recv->buf + inline_segment->address;
@@ -2634,6 +2634,12 @@ static void nvmf_rdma_destroy_drained_qpair(void *ctx)
 	}
 
 	spdk_nvmf_rdma_qpair_process_pending(rtransport, rqpair, true);
+
+	/* Qpair will be destroyed after nvmf layer closes this qpair */
+	if (rqpair->qpair.state != SPDK_NVMF_QPAIR_ERROR) {
+		return;
+	}
+
 	spdk_nvmf_rdma_qpair_destroy(rqpair);
 }
 
@@ -2686,6 +2692,15 @@ static const char *CM_EVENT_STR[] = {
 	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
 };
 #endif /* DEBUG */
+
+static void
+nvmf_rdma_handle_last_wqe_reached(void *ctx)
+{
+	struct spdk_nvmf_rdma_qpair *rqpair = ctx;
+	rqpair->last_wqe_reached = true;
+
+	nvmf_rdma_destroy_drained_qpair(rqpair);
+}
 
 static void
 spdk_nvmf_process_cm_event(struct spdk_nvmf_transport *transport, new_qpair_fn cb_fn)
@@ -2795,14 +2810,13 @@ spdk_nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 	case IBV_EVENT_QP_LAST_WQE_REACHED:
 		/* This event only occurs for shared receive queues. */
 		rqpair = event.element.qp->qp_context;
-		rqpair->last_wqe_reached = true;
-
 		SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Last WQE reached event received for rqpair %p\n", rqpair);
 		/* This must be handled on the polling thread if it exists. Otherwise the timeout will catch it. */
 		if (rqpair->qpair.group) {
-			spdk_thread_send_msg(rqpair->qpair.group->thread, nvmf_rdma_destroy_drained_qpair, rqpair);
+			spdk_thread_send_msg(rqpair->qpair.group->thread, nvmf_rdma_handle_last_wqe_reached, rqpair);
 		} else {
 			SPDK_ERRLOG("Unable to destroy the qpair %p since it does not have a poll group.\n", rqpair);
+			rqpair->last_wqe_reached = true;
 		}
 
 		break;

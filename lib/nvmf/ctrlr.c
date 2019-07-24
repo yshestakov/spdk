@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -513,6 +513,8 @@ spdk_nvmf_ctrlr_connect(struct spdk_nvmf_request *req)
 	}
 
 	if ((subsystem->state == SPDK_NVMF_SUBSYSTEM_INACTIVE) ||
+	    (subsystem->state == SPDK_NVMF_SUBSYSTEM_PAUSING) ||
+	    (subsystem->state == SPDK_NVMF_SUBSYSTEM_PAUSED) ||
 	    (subsystem->state == SPDK_NVMF_SUBSYSTEM_DEACTIVATING)) {
 		SPDK_ERRLOG("Subsystem '%s' is not ready\n", subnqn);
 		rsp->status.sct = SPDK_NVME_SCT_COMMAND_SPECIFIC;
@@ -555,9 +557,16 @@ spdk_nvmf_ctrlr_connect(struct spdk_nvmf_request *req)
 
 	/*
 	 * SQSIZE is a 0-based value, so it must be at least 1 (minimum queue depth is 2) and
-	 *  strictly less than max_queue_depth.
+	 *  strictly less than max_aq_depth (admin queues) or max_queue_depth (io queues).
 	 */
-	if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_queue_depth) {
+	if (cmd->qid == 0) {
+		if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_aq_depth) {
+			SPDK_ERRLOG("Invalid SQSIZE for admin queue %u (min 1, max %u)\n",
+				    cmd->sqsize, qpair->transport->opts.max_aq_depth - 1);
+			SPDK_NVMF_INVALID_CONNECT_CMD(rsp, sqsize);
+			return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
+		}
+	} else if (cmd->sqsize == 0 || cmd->sqsize >= qpair->transport->opts.max_queue_depth) {
 		SPDK_ERRLOG("Invalid SQSIZE %u (min 1, max %u)\n",
 			    cmd->sqsize, qpair->transport->opts.max_queue_depth - 1);
 		SPDK_NVMF_INVALID_CONNECT_CMD(rsp, sqsize);
@@ -1215,6 +1224,7 @@ spdk_nvmf_ctrlr_async_event_request(struct spdk_nvmf_request *req)
 {
 	struct spdk_nvmf_ctrlr *ctrlr = req->qpair->ctrlr;
 	struct spdk_nvme_cpl *rsp = &req->rsp->nvme_cpl;
+	struct spdk_nvmf_subsystem_poll_group *sgroup;
 
 	SPDK_DEBUGLOG(SPDK_LOG_NVMF, "Async Event Request\n");
 
@@ -1239,6 +1249,10 @@ spdk_nvmf_ctrlr_async_event_request(struct spdk_nvmf_request *req)
 		ctrlr->reservation_event.raw = 0;
 		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 	}
+
+	/* AER cmd is an exception */
+	sgroup = &req->qpair->group->sgroups[ctrlr->subsys->id];
+	sgroup->io_outstanding--;
 
 	ctrlr->aer_req = req;
 	return SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS;
@@ -2379,6 +2393,8 @@ spdk_nvmf_ctrlr_process_io_cmd(struct spdk_nvmf_request *req)
 		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 	}
 
+	/* scan-build falsely reporting dereference of null pointer */
+	assert(group != NULL && group->sgroups != NULL);
 	ns_info = &group->sgroups[ctrlr->subsys->id].ns_info[nsid - 1];
 	if (nvmf_ns_reservation_request_check(ns_info, ctrlr, req)) {
 		SPDK_DEBUGLOG(SPDK_LOG_NVMF, "Reservation Conflict for nsid %u, opcode %u\n",
@@ -2445,12 +2461,16 @@ spdk_nvmf_request_complete(struct spdk_nvmf_request *req)
 {
 	struct spdk_nvme_cpl *rsp = &req->rsp->nvme_cpl;
 	struct spdk_nvmf_qpair *qpair;
+	struct spdk_nvmf_subsystem_poll_group *sgroup = NULL;
 
 	rsp->sqid = 0;
 	rsp->status.p = 0;
 	rsp->cid = req->cmd->nvme_cmd.cid;
 
 	qpair = req->qpair;
+	if (qpair->ctrlr) {
+		sgroup = &qpair->group->sgroups[qpair->ctrlr->subsys->id];
+	}
 
 	SPDK_DEBUGLOG(SPDK_LOG_NVMF,
 		      "cpl: cid=%u cdw0=0x%08x rsvd1=%u status=0x%04x\n",
@@ -2460,6 +2480,19 @@ spdk_nvmf_request_complete(struct spdk_nvmf_request *req)
 	TAILQ_REMOVE(&qpair->outstanding, req, link);
 	if (spdk_nvmf_transport_req_complete(req)) {
 		SPDK_ERRLOG("Transport request completion error!\n");
+	}
+
+	/* AER cmd and fabric connect are exceptions */
+	if (sgroup != NULL && qpair->ctrlr->aer_req != req &&
+	    !(req->cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC &&
+	      req->cmd->nvmf_cmd.fctype == SPDK_NVMF_FABRIC_COMMAND_CONNECT)) {
+		assert(sgroup->io_outstanding > 0);
+		sgroup->io_outstanding--;
+		if (sgroup->state == SPDK_NVMF_SUBSYSTEM_PAUSING &&
+		    sgroup->io_outstanding == 0) {
+			sgroup->state = SPDK_NVMF_SUBSYSTEM_PAUSED;
+			sgroup->cb_fn(sgroup->cb_arg, 0);
+		}
 	}
 
 	spdk_nvmf_qpair_request_cleanup(qpair);
@@ -2516,27 +2549,36 @@ spdk_nvmf_request_exec(struct spdk_nvmf_request *req)
 {
 	struct spdk_nvmf_qpair *qpair = req->qpair;
 	spdk_nvmf_request_exec_status status;
+	struct spdk_nvmf_subsystem_poll_group *sgroup = NULL;
 
 	nvmf_trace_command(req->cmd, spdk_nvmf_qpair_is_admin_queue(qpair));
+
+	if (qpair->ctrlr) {
+		sgroup = &qpair->group->sgroups[qpair->ctrlr->subsys->id];
+	}
 
 	if (qpair->state != SPDK_NVMF_QPAIR_ACTIVE) {
 		req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
 		req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_COMMAND_SEQUENCE_ERROR;
 		/* Place the request on the outstanding list so we can keep track of it */
 		TAILQ_INSERT_TAIL(&qpair->outstanding, req, link);
+		/* Still increment io_outstanding because request_complete decrements it */
+		if (sgroup != NULL) {
+			sgroup->io_outstanding++;
+		}
 		spdk_nvmf_request_complete(req);
 		return;
 	}
 
 	/* Check if the subsystem is paused (if there is a subsystem) */
-	if (qpair->ctrlr) {
-		struct spdk_nvmf_subsystem_poll_group *sgroup = &qpair->group->sgroups[qpair->ctrlr->subsys->id];
+	if (sgroup != NULL) {
 		if (sgroup->state != SPDK_NVMF_SUBSYSTEM_ACTIVE) {
 			/* The subsystem is not currently active. Queue this request. */
 			TAILQ_INSERT_TAIL(&sgroup->queued, req, link);
 			return;
 		}
 
+		sgroup->io_outstanding++;
 	}
 
 	/* Place the request on the outstanding list so we can keep track of it */

@@ -236,7 +236,7 @@ file_length(void)
 	/* Spin until all of the data has been flushed to the SSD.  There's been no
 	 * sync operation yet, so the xattr on the file is still 0.
 	 */
-	while (g_file->length_flushed != buf_length) {}
+	while (((volatile struct spdk_file *)g_file)->length_flushed != buf_length) {}
 
 	/* Close the file.  This causes an implicit sync which should write the
 	 * length_flushed value as the "length" xattr on the file.
