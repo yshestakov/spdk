@@ -177,7 +177,7 @@ done
   mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
   install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
   install -p -m 755 scripts/rpc.py %{install_bindir}/spdk_rpc.py
-  sed -i -e 's!/usr/bin/env python2$!/usr/bin/env python2!' %{install_bindir}/spdk_rpc.py
+  sed -i -e 's!/usr/bin/env python3$!/usr/bin/env python2!' %{install_bindir}/spdk_rpc.py
 %endif
 # mkdir -p %{buildroot}/%{_sysconfdir}/avahi/services/
 # install -p -m 644 contrib/avahi-spdk.service %{buildroot}/%{_sysconfdir}/avahi/services/spdk.service

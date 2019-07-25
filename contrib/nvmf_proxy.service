@@ -6,7 +6,7 @@ After=network.target network-online.target openibd.service
 [Service]
 EnvironmentFile=/etc/default/nvmf_proxy
 ExecStartPre=/usr/sbin/setup_hugepages.sh
-ExecStartPre=/usr/sbin/arp_fixup.sh
+# ExecStartPre=/usr/sbin/arp_fixup.sh
 ExecStart=/usr/sbin/nvmf_tgt -m $CPU_MASK -c $NVMF_TGT_CONF $EXTRA_ARGS
 ExecStartPost=/usr/bin/sleep 1
 ExecStartPost=/usr/bin/spdk_rpc.py start_subsystem_init
