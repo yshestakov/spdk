@@ -251,7 +251,10 @@ struct spdk_nvmf_rdma_request_data {
 	struct ibv_send_wr		wr;
 	struct ibv_sge			sgl[SPDK_NVMF_MAX_SGL_ENTRIES];
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	uint32_t			orig_length;
+	bool				sig_offloaded;
 	struct ibv_mr			*sig_mr;
+	struct ibv_sge			sig_sgl;
 #endif
 };
 
@@ -1926,6 +1929,32 @@ spdk_nvmf_rdma_check_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 	}
 	return 0;
 }
+
+static int
+spdk_nvmf_rdma_offload_signature(struct spdk_nvmf_rdma_request *rdma_req)
+{
+	int rc;
+
+	rc = spdk_nvmf_rdma_reg_sig_mr(rdma_req);
+	if (rc) {
+		SPDK_ERRLOG("Failed to register signature MR\n");
+		return rc;
+	}
+
+	/* Data WR should use signature MR now */
+	rdma_req->data.sig_sgl.addr = (uintptr_t)rdma_req->data.sig_mr->addr;
+	rdma_req->data.sig_sgl.length = rdma_req->data.orig_length;
+	rdma_req->data.sig_sgl.lkey = rdma_req->data.sig_mr->lkey;
+	rdma_req->data.wr.sg_list = &rdma_req->data.sig_sgl;
+	rdma_req->data.wr.num_sge = 1;
+
+	rdma_req->data.sig_offloaded = true;
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Offloading signature for request: lba %lu, length %u\n",
+		      ((uint64_t)rdma_req->req.cmd->nvme_cmd.cdw11 << 32)
+		      + rdma_req->req.cmd->nvme_cmd.cdw10,
+		      rdma_req->req.length);
+	return 0;
+}
 #endif
 
 static int
@@ -1962,6 +1991,10 @@ spdk_nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 
 		/* fill request length and populate iovs */
 		rdma_req->req.length = sgl->keyed.length;
+		if (spdk_unlikely(rdma_req->dif_insert_or_strip)) {
+			rdma_req->data.orig_length = rdma_req->req.length;
+			rdma_req->req.length = spdk_dif_get_length_with_md(rdma_req->req.length, &rdma_req->dif_ctx);
+		}
 
 		if (spdk_nvmf_rdma_request_fill_iovs(rtransport, device, rdma_req) < 0) {
 			/* No available buffers. Queue this request up. */
@@ -2067,6 +2100,16 @@ nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 		spdk_nvmf_request_free_buffers(&rdma_req->req, &rgroup->group, &rtransport->transport,
 					       rdma_req->req.iovcnt);
 	}
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+	/* @todo: invalidate as soon as possible */
+	if (rdma_req->data.sig_offloaded) {
+		if (spdk_nvmf_rdma_inv_sig_mr(rdma_req)) {
+			SPDK_ERRLOG("Failed to invalidate signature MR\n");
+		}
+		rdma_req->data.wr.sg_list = rdma_req->data.sgl;
+		rdma_req->data.sig_offloaded = false;
+	}
+#endif
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	rdma_req->req.length = 0;
 	rdma_req->req.iovcnt = 0;
@@ -2181,6 +2224,21 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 
 			STAILQ_REMOVE_HEAD(&rgroup->pending_data_buf_queue, state_link);
+
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+			if (spdk_unlikely(rdma_req->dif_insert_or_strip) &&
+			    (device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) &&
+			    /* @todo: only single SGL is supported at the moment */
+			    (1 == rdma_req->num_outstanding_data_wr) &&
+			    /* @todo: only single buffer is supported at the moment */
+			    (1 == rdma_req->data.wr.num_sge)) {
+				if (spdk_nvmf_rdma_offload_signature(rdma_req)) {
+					SPDK_ERRLOG("Failed to offload signature calculation\n");
+					rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+					return -1;
+				}
+			}
+#endif
 
 			/* If data is transferring from host to controller and the data didn't
 			 * arrive using in capsule data, we need to do a transfer from the host.
@@ -3711,6 +3769,18 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			rqpair->current_send_depth -= rdma_req->num_outstanding_data_wr + 1;
 			rdma_req->num_outstanding_data_wr = 0;
 
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+			if (spdk_unlikely(rdma_req->dif_insert_or_strip) &&
+			    (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) &&
+			    rdma_req->data.sig_offloaded) {
+				/* @todo: handle error
+				 * Pipelining is required to handle this case.
+				 * Without pipelining response is already sent
+				 * and we can do nothing (except QP disconnect).
+				 */
+				spdk_nvmf_rdma_check_sig_mr(rdma_req);
+			}
+#endif
 			spdk_nvmf_rdma_request_process(rtransport, rdma_req);
 			break;
 		case RDMA_WR_TYPE_RECV:
@@ -3749,6 +3819,15 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 				rqpair->current_read_depth--;
 				/* wait for all outstanding reads associated with the same rdma_req to complete before proceeding. */
 				if (rdma_req->num_outstanding_data_wr == 0) {
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+					if (spdk_unlikely(rdma_req->dif_insert_or_strip) &&
+					    rdma_req->data.sig_offloaded) {
+						/* @todo: handle error
+						 * Disconnect QP like in TCP?
+						 */
+						spdk_nvmf_rdma_check_sig_mr(rdma_req);
+					}
+#endif
 					rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
 					spdk_nvmf_rdma_request_process(rtransport, rdma_req);
 				}
