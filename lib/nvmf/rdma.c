@@ -1838,6 +1838,96 @@ err_exit:
 	return rc;
 }
 
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+static int
+spdk_nvmf_rdma_reg_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct spdk_nvmf_rdma_qpair *rqpair;
+	struct ibv_exp_sig_attrs sig_attrs = {};
+	struct ibv_exp_send_wr wr = {};
+	struct ibv_exp_send_wr *bad_wr;
+	int rc;
+
+	sig_attrs.check_mask = 0xff;
+	/* No signature on wire */
+	sig_attrs.wire.sig_type = IBV_EXP_SIG_TYPE_NONE;
+	/* T10 DIF signature in memory */
+	sig_attrs.mem.sig_type = IBV_EXP_SIG_TYPE_T10_DIF;
+	sig_attrs.mem.sig.dif.bg_type = IBV_EXP_T10DIF_CRC;
+	sig_attrs.mem.sig.dif.pi_interval = rdma_req->dif_ctx.guard_interval;
+	sig_attrs.mem.sig.dif.bg = 0;
+	sig_attrs.mem.sig.dif.app_tag = 0;
+	sig_attrs.mem.sig.dif.ref_tag = rdma_req->dif_ctx.init_ref_tag;
+	sig_attrs.mem.sig.dif.ref_remap = 1;
+	sig_attrs.mem.sig.dif.app_escape = 1;
+	sig_attrs.mem.sig.dif.ref_escape = 1;
+	sig_attrs.mem.sig.dif.apptag_check_mask = rdma_req->dif_ctx.apptag_mask;
+
+	wr.exp_opcode = IBV_EXP_WR_REG_SIG_MR;
+	wr.ext_op.sig_handover.sig_attrs = &sig_attrs;
+	wr.ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
+	wr.ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
+	wr.sg_list = rdma_req->data.sgl;
+	wr.num_sge = rdma_req->req.iovcnt;
+
+	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	/* @todo: WR should be chained with READ or WRITE and/or queue depth must be checked */
+	rc = ibv_exp_post_send(rqpair->qp, &wr, &bad_wr);
+	if (rc) {
+		SPDK_ERRLOG("Failed to post REG_SIG_MR work request, errno %d\n", rc);
+		assert(0);
+		return rc;
+	}
+
+	return 0;
+}
+
+static int
+spdk_nvmf_rdma_inv_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct spdk_nvmf_rdma_qpair *rqpair;
+	struct ibv_exp_send_wr wr = {};
+	struct ibv_exp_send_wr *bad_wr;
+	int rc;
+
+	wr.exp_opcode = IBV_EXP_WR_LOCAL_INV;
+	wr.ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
+
+	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rc = ibv_exp_post_send(rqpair->qp, &wr, &bad_wr);
+	if (rc) {
+		SPDK_ERRLOG("Failed to post LOCAL_INV work request, errno %d\n", rc);
+		return rc;
+	}
+
+	return 0;
+}
+
+static int
+spdk_nvmf_rdma_check_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct ibv_exp_mr_status status;
+	int rc;
+
+	rc = ibv_exp_check_mr_status(rdma_req->data.sig_mr, IBV_EXP_MR_CHECK_SIG_STATUS, &status);
+	if (rc) {
+		SPDK_ERRLOG("Failed to check signature MR status, errno %d\n", rc);
+		return -1;
+	}
+
+	if (status.fail_status) {
+		SPDK_ERRLOG("Signature error: type %d, expected %u, actual %u, offset %lu, key %u\n",
+			    status.sig_err.err_type,
+			    status.sig_err.expected,
+			    status.sig_err.actual,
+			    status.sig_err.sig_err_offset,
+			    status.sig_err.key);
+		return 1;
+	}
+	return 0;
+}
+#endif
+
 static int
 spdk_nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 				 struct spdk_nvmf_rdma_device *device,
