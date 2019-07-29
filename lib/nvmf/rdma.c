@@ -3748,6 +3748,16 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	rpoller->stat.completions += reaped;
 
 	for (i = 0; i < reaped; i++) {
+#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
+		if (wc[i].status && (0 == wc[i].wr_id)) {
+			/* Signature related WR has failed. Do not handle it here
+			 * since subsequent WRs will also fail and cause QP disconnect.
+			 */
+			SPDK_ERRLOG("CQ error on CQ %p, wr_id 0x%lu (%d): %s\n",
+				    rpoller->cq, wc[i].wr_id, wc[i].status, ibv_wc_status_str(wc[i].status));
+			continue;
+		}
+#endif
 
 		rdma_wr = (struct spdk_nvmf_rdma_wr *)wc[i].wr_id;
 
