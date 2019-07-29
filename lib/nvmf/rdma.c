@@ -1045,6 +1045,8 @@ spdk_nvmf_rdma_create_qp(struct spdk_nvmf_rdma_qpair *rqpair)
 	ibv_init_attr.comp_mask |= IBV_QP_INIT_ATTR_PD;
 	/* Signature offload attributes */
 	if (device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) {
+		/* @todo: Looks like REG_SIG_MR consumes more than one WR internally. Should we adjust depth for it? */
+		ibv_init_attr.cap.max_send_wr	= rqpair->max_queue_depth * 4; /* REG_MR, READ/WRITE, SEND, INV_MR */
 		ibv_init_attr.exp_create_flags |= IBV_EXP_QP_CREATE_SIGNATURE_EN |
 			IBV_EXP_QP_CREATE_SIGNATURE_PIPELINE;
 		ibv_init_attr.comp_mask |= IBV_EXP_QP_INIT_ATTR_CREATE_FLAGS;
