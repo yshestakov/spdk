@@ -218,6 +218,7 @@ enum spdk_nvmf_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
 	RDMA_WR_TYPE_SEND,
 	RDMA_WR_TYPE_DATA,
+	RDMA_WR_TYPE_SIG_INVALIDATE
 };
 
 struct spdk_nvmf_rdma_wr {
@@ -253,6 +254,7 @@ struct spdk_nvmf_rdma_request_data {
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 	uint32_t			orig_length;
 	bool				sig_offloaded;
+	struct spdk_nvmf_rdma_wr	sig_wr;
 	struct ibv_mr			*sig_mr;
 	struct ibv_sge			sig_sgl;
 #endif
@@ -1895,8 +1897,11 @@ spdk_nvmf_rdma_inv_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 	struct ibv_exp_send_wr *bad_wr;
 	int rc;
 
+	rdma_req->data.sig_wr.type = RDMA_WR_TYPE_SIG_INVALIDATE;
+	wr.wr_id = (uintptr_t)&rdma_req->data.sig_wr;
 	wr.exp_opcode = IBV_EXP_WR_LOCAL_INV;
 	wr.ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
+	wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	rc = ibv_exp_post_send(rqpair->qp, &wr, &bad_wr);
@@ -2102,16 +2107,6 @@ nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 		spdk_nvmf_request_free_buffers(&rdma_req->req, &rgroup->group, &rtransport->transport,
 					       rdma_req->req.iovcnt);
 	}
-#ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
-	/* @todo: invalidate as soon as possible */
-	if (rdma_req->data.sig_offloaded) {
-		if (spdk_nvmf_rdma_inv_sig_mr(rdma_req)) {
-			SPDK_ERRLOG("Failed to invalidate signature MR\n");
-		}
-		rdma_req->data.wr.sg_list = rdma_req->data.sgl;
-		rdma_req->data.sig_offloaded = false;
-	}
-#endif
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	rdma_req->req.length = 0;
 	rdma_req->req.iovcnt = 0;
@@ -3776,23 +3771,42 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 				SPDK_ERRLOG("data=%p length=%u\n", rdma_req->req.data, rdma_req->req.length);
 			}
 
-			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			/* +1 for the response wr */
 			rqpair->current_send_depth -= rdma_req->num_outstanding_data_wr + 1;
 			rdma_req->num_outstanding_data_wr = 0;
 
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 			if (spdk_unlikely(rdma_req->dif_insert_or_strip) &&
-			    (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) &&
 			    rdma_req->data.sig_offloaded) {
-				/* @todo: handle error
-				 * Pipelining is required to handle this case.
-				 * Without pipelining response is already sent
-				 * and we can do nothing (except QP disconnect).
-				 */
-				spdk_nvmf_rdma_check_sig_mr(rdma_req);
+				if (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) {
+					/* @todo: handle error
+					 * Pipelining is required to handle this case.
+					 * Without pipelining response is already sent
+					 * and we can do nothing (except QP disconnect).
+					 */
+					spdk_nvmf_rdma_check_sig_mr(rdma_req);
+				}
+				if (spdk_nvmf_rdma_inv_sig_mr(rdma_req)) {
+					SPDK_ERRLOG("Failed to invalidate signature MR\n");
+				}
+				rdma_req->data.wr.sg_list = rdma_req->data.sgl;
+				rdma_req->data.sig_offloaded = false;
+				/* We have to wait for invalidate completion to release request */
+				break;
 			}
 #endif
+			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
+			spdk_nvmf_rdma_request_process(rtransport, rdma_req);
+			break;
+		case RDMA_WR_TYPE_SIG_INVALIDATE:
+			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, data.sig_wr);
+			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+
+			if (wc[i].status) {
+				SPDK_ERRLOG("Signature MR invalidation failed: qp %p, status %d - %s\n",
+					    rqpair, wc[i].status, ibv_wc_status_str(wc[i].status));
+			}
+			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			spdk_nvmf_rdma_request_process(rtransport, rdma_req);
 			break;
 		case RDMA_WR_TYPE_RECV:
