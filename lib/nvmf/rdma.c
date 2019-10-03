@@ -254,7 +254,7 @@ struct spdk_nvmf_rdma_request_data {
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 	uint32_t			orig_length;
 	bool				sig_offloaded;
-	struct spdk_nvmf_rdma_wr	sig_wr;
+	bool				registered;
 	struct ibv_mr			*sig_mr;
 	struct ibv_sge			sig_sgl;
 #endif
@@ -1851,7 +1851,9 @@ spdk_nvmf_rdma_reg_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 {
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	struct ibv_exp_sig_attrs sig_attrs = {};
-	struct ibv_exp_send_wr wr = {};
+	struct ibv_exp_send_wr reg_wr = {};
+	struct ibv_exp_send_wr inv_wr = {};
+	struct ibv_exp_send_wr *wr = &reg_wr;
 	struct ibv_exp_send_wr *bad_wr;
 	int rc;
 
@@ -1870,45 +1872,29 @@ spdk_nvmf_rdma_reg_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 	sig_attrs.mem.sig.dif.ref_escape = 1;
 	sig_attrs.mem.sig.dif.apptag_check_mask = rdma_req->dif_ctx.apptag_mask;
 
-	wr.exp_opcode = IBV_EXP_WR_REG_SIG_MR;
-	wr.ext_op.sig_handover.sig_attrs = &sig_attrs;
-	wr.ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
-	wr.ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
-	wr.sg_list = rdma_req->data.sgl;
-	wr.num_sge = rdma_req->req.iovcnt;
+	reg_wr.exp_opcode = IBV_EXP_WR_REG_SIG_MR;
+	reg_wr.ext_op.sig_handover.sig_attrs = &sig_attrs;
+	reg_wr.ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
+	reg_wr.ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
+	reg_wr.sg_list = rdma_req->data.sgl;
+	reg_wr.num_sge = rdma_req->req.iovcnt;
+
+	if (rdma_req->data.registered) {
+		inv_wr.exp_opcode = IBV_EXP_WR_LOCAL_INV;
+		inv_wr.ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
+		inv_wr.next = &reg_wr;
+		wr = &inv_wr;
+	}
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	/* @todo: WR should be chained with READ or WRITE and/or queue depth must be checked */
-	rc = ibv_exp_post_send(rqpair->qp, &wr, &bad_wr);
+	rc = ibv_exp_post_send(rqpair->qp, wr, &bad_wr);
 	if (rc) {
 		SPDK_ERRLOG("Failed to post REG_SIG_MR work request, errno %d\n", rc);
 		assert(0);
 		return rc;
 	}
-
-	return 0;
-}
-
-static int
-spdk_nvmf_rdma_inv_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
-{
-	struct spdk_nvmf_rdma_qpair *rqpair;
-	struct ibv_exp_send_wr wr = {};
-	struct ibv_exp_send_wr *bad_wr;
-	int rc;
-
-	rdma_req->data.sig_wr.type = RDMA_WR_TYPE_SIG_INVALIDATE;
-	wr.wr_id = (uintptr_t)&rdma_req->data.sig_wr;
-	wr.exp_opcode = IBV_EXP_WR_LOCAL_INV;
-	wr.ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
-	wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
-
-	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
-	rc = ibv_exp_post_send(rqpair->qp, &wr, &bad_wr);
-	if (rc) {
-		SPDK_ERRLOG("Failed to post LOCAL_INV work request, errno %d\n", rc);
-		return rc;
-	}
+	rdma_req->data.registered = true;
 
 	return 0;
 }
@@ -3786,26 +3772,10 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 					 */
 					spdk_nvmf_rdma_check_sig_mr(rdma_req);
 				}
-				if (spdk_nvmf_rdma_inv_sig_mr(rdma_req)) {
-					SPDK_ERRLOG("Failed to invalidate signature MR\n");
-				}
 				rdma_req->data.wr.sg_list = rdma_req->data.sgl;
 				rdma_req->data.sig_offloaded = false;
-				/* We have to wait for invalidate completion to release request */
-				break;
 			}
 #endif
-			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-			spdk_nvmf_rdma_request_process(rtransport, rdma_req);
-			break;
-		case RDMA_WR_TYPE_SIG_INVALIDATE:
-			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, data.sig_wr);
-			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
-
-			if (wc[i].status) {
-				SPDK_ERRLOG("Signature MR invalidation failed: qp %p, status %d - %s\n",
-					    rqpair, wc[i].status, ibv_wc_status_str(wc[i].status));
-			}
 			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			spdk_nvmf_rdma_request_process(rtransport, rdma_req);
 			break;
