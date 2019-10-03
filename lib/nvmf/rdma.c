@@ -249,7 +249,7 @@ struct spdk_nvmf_rdma_recv {
 
 struct spdk_nvmf_rdma_request_data {
 	struct spdk_nvmf_rdma_wr	rdma_wr;
-	struct ibv_send_wr		wr;
+	struct ibv_exp_send_wr		wr;
 	struct ibv_sge			sgl[SPDK_NVMF_MAX_SGL_ENTRIES];
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 	uint32_t			orig_length;
@@ -269,7 +269,7 @@ struct spdk_nvmf_rdma_request {
 
 	struct {
 		struct spdk_nvmf_rdma_wr	rdma_wr;
-		struct	ibv_send_wr		wr;
+		struct	ibv_exp_send_wr		wr;
 		struct	ibv_sge			sgl[NVMF_DEFAULT_RSP_SGE];
 	} rsp;
 
@@ -301,8 +301,8 @@ struct spdk_nvmf_rdma_resource_opts {
 };
 
 struct spdk_nvmf_send_wr_list {
-	struct ibv_send_wr	*first;
-	struct ibv_send_wr	*last;
+	struct ibv_exp_send_wr	*first;
+	struct ibv_exp_send_wr	*last;
 };
 
 struct spdk_nvmf_recv_wr_list {
@@ -663,7 +663,7 @@ nvmf_rdma_request_free_data(struct spdk_nvmf_rdma_request *rdma_req,
 			    struct spdk_nvmf_rdma_transport *rtransport)
 {
 	struct spdk_nvmf_rdma_request_data	*data_wr;
-	struct ibv_send_wr			*next_send_wr;
+	struct ibv_exp_send_wr			*next_send_wr;
 	uint64_t				req_wrid;
 
 	rdma_req->num_outstanding_data_wr = 0;
@@ -877,8 +877,8 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		rdma_req->rsp.rdma_wr.type = RDMA_WR_TYPE_SEND;
 		rdma_req->rsp.wr.wr_id = (uintptr_t)&rdma_req->rsp.rdma_wr;
 		rdma_req->rsp.wr.next = NULL;
-		rdma_req->rsp.wr.opcode = IBV_WR_SEND;
-		rdma_req->rsp.wr.send_flags = IBV_SEND_SIGNALED;
+		rdma_req->rsp.wr.exp_opcode = IBV_EXP_WR_SEND;
+		rdma_req->rsp.wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
 		rdma_req->rsp.wr.sg_list = rdma_req->rsp.sgl;
 		rdma_req->rsp.wr.num_sge = SPDK_COUNTOF(rdma_req->rsp.sgl);
 
@@ -886,7 +886,7 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		rdma_req->data.rdma_wr.type = RDMA_WR_TYPE_DATA;
 		rdma_req->data.wr.wr_id = (uintptr_t)&rdma_req->data.rdma_wr;
 		rdma_req->data.wr.next = NULL;
-		rdma_req->data.wr.send_flags = IBV_SEND_SIGNALED;
+		rdma_req->data.wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
 		rdma_req->data.wr.sg_list = rdma_req->data.sgl;
 		rdma_req->data.wr.num_sge = SPDK_COUNTOF(rdma_req->data.sgl);
 
@@ -1203,9 +1203,9 @@ nvmf_rdma_qpair_queue_recv_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_r
 /* Append the given send wr structure to the qpair's outstanding sends list. */
 /* This function accepts either a single wr or the first wr in a linked list. */
 static void
-nvmf_rdma_qpair_queue_send_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_send_wr *first)
+nvmf_rdma_qpair_queue_send_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_exp_send_wr *first)
 {
-	struct ibv_send_wr *last;
+	struct ibv_exp_send_wr *last;
 
 	last = first;
 	while (last->next != NULL) {
@@ -1250,7 +1250,7 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	struct spdk_nvmf_qpair		*qpair;
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 	struct spdk_nvme_cpl		*rsp;
-	struct ibv_send_wr		*first = NULL;
+	struct ibv_exp_send_wr		*first = NULL;
 
 	*data_posted = 0;
 	qpair = req->qpair;
@@ -1559,8 +1559,8 @@ spdk_nvmf_rdma_request_get_xfer(struct spdk_nvmf_rdma_request *rdma_req)
 	struct spdk_nvme_sgl_descriptor *sgl = &cmd->dptr.sgl1;
 
 #ifdef SPDK_CONFIG_RDMA_SEND_WITH_INVAL
-	rdma_req->rsp.wr.opcode = IBV_WR_SEND;
-	rdma_req->rsp.wr.imm_data = 0;
+	rdma_req->rsp.wr.exp_opcode = IBV_EXP_WR_SEND;
+	rdma_req->rsp.wr.ex.imm_data = 0;
 #endif
 
 	/* Figure out data transfer direction */
@@ -1628,11 +1628,11 @@ nvmf_request_alloc_wrs(struct spdk_nvmf_rdma_transport *rtransport,
 
 	for (i = 0; i < num_sgl_descriptors; i++) {
 		if (rdma_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
-			current_data_wr->wr.opcode = IBV_WR_RDMA_WRITE;
-			current_data_wr->wr.send_flags = 0;
+			current_data_wr->wr.exp_opcode = IBV_EXP_WR_RDMA_WRITE;
+			current_data_wr->wr.exp_send_flags = 0;
 		} else if (rdma_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
-			current_data_wr->wr.opcode = IBV_WR_RDMA_READ;
-			current_data_wr->wr.send_flags = IBV_SEND_SIGNALED;
+			current_data_wr->wr.exp_opcode = IBV_EXP_WR_RDMA_READ;
+			current_data_wr->wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
 		} else {
 			assert(false);
 		}
@@ -1643,13 +1643,13 @@ nvmf_request_alloc_wrs(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 	if (rdma_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
-		current_data_wr->wr.opcode = IBV_WR_RDMA_WRITE;
+		current_data_wr->wr.exp_opcode = IBV_EXP_WR_RDMA_WRITE;
 		current_data_wr->wr.next = &rdma_req->rsp.wr;
-		current_data_wr->wr.send_flags = 0;
+		current_data_wr->wr.exp_send_flags = 0;
 	} else if (rdma_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
-		current_data_wr->wr.opcode = IBV_WR_RDMA_READ;
+		current_data_wr->wr.exp_opcode = IBV_EXP_WR_RDMA_READ;
 		current_data_wr->wr.next = NULL;
-		current_data_wr->wr.send_flags = IBV_SEND_SIGNALED;
+		current_data_wr->wr.exp_send_flags = IBV_EXP_SEND_SIGNALED;
 	}
 	return 0;
 }
@@ -1659,7 +1659,7 @@ nvmf_rdma_fill_buffers(struct spdk_nvmf_rdma_transport *rtransport,
 		       struct spdk_nvmf_rdma_poll_group *rgroup,
 		       struct spdk_nvmf_rdma_device *device,
 		       struct spdk_nvmf_rdma_request *rdma_req,
-		       struct ibv_send_wr *wr,
+		       struct ibv_exp_send_wr *wr,
 		       uint32_t length)
 {
 	uint64_t	translation_len;
@@ -1756,7 +1756,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 {
 	struct spdk_nvmf_rdma_qpair		*rqpair;
 	struct spdk_nvmf_rdma_poll_group	*rgroup;
-	struct ibv_send_wr			*current_wr;
+	struct ibv_exp_send_wr			*current_wr;
 	struct spdk_nvmf_request		*req = &rdma_req->req;
 	struct spdk_nvme_sgl_descriptor		*inline_segment, *desc;
 	uint32_t				num_sgl_descriptors;
@@ -1828,8 +1828,8 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	desc--;
 	if ((device->attr.device_cap_flags & IBV_DEVICE_MEM_MGT_EXTENSIONS) != 0) {
 		if (desc->keyed.subtype == SPDK_NVME_SGL_SUBTYPE_INVALIDATE_KEY) {
-			rdma_req->rsp.wr.opcode = IBV_WR_SEND_WITH_INV;
-			rdma_req->rsp.wr.imm_data = desc->keyed.key;
+			rdma_req->rsp.wr.exp_opcode = IBV_EXP_WR_SEND_WITH_INV;
+			rdma_req->rsp.wr.ex.imm_data = desc->keyed.key;
 		}
 	}
 #endif
@@ -1976,8 +1976,8 @@ spdk_nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 #ifdef SPDK_CONFIG_RDMA_SEND_WITH_INVAL
 		if ((device->attr.device_cap_flags & IBV_DEVICE_MEM_MGT_EXTENSIONS) != 0) {
 			if (sgl->keyed.subtype == SPDK_NVME_SGL_SUBTYPE_INVALIDATE_KEY) {
-				rdma_req->rsp.wr.opcode = IBV_WR_SEND_WITH_INV;
-				rdma_req->rsp.wr.imm_data = sgl->keyed.key;
+				rdma_req->rsp.wr.exp_opcode = IBV_EXP_WR_SEND_WITH_INV;
+				rdma_req->rsp.wr.ex.imm_data = sgl->keyed.key;
 			}
 		}
 #endif
@@ -2003,13 +2003,13 @@ spdk_nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 		rdma_req->data.wr.wr.rdma.rkey = sgl->keyed.key;
 		rdma_req->data.wr.wr.rdma.remote_addr = sgl->address;
 		if (rdma_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
-			rdma_req->data.wr.opcode = IBV_WR_RDMA_WRITE;
+			rdma_req->data.wr.exp_opcode = IBV_EXP_WR_RDMA_WRITE;
 			rdma_req->data.wr.next = &rdma_req->rsp.wr;
-			rdma_req->data.wr.send_flags &= ~IBV_SEND_SIGNALED;
+			rdma_req->data.wr.exp_send_flags &= ~IBV_EXP_SEND_SIGNALED;
 		} else if (rdma_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
-			rdma_req->data.wr.opcode = IBV_WR_RDMA_READ;
+			rdma_req->data.wr.exp_opcode = IBV_EXP_WR_RDMA_READ;
 			rdma_req->data.wr.next = NULL;
-			rdma_req->data.wr.send_flags |= IBV_SEND_SIGNALED;
+			rdma_req->data.wr.exp_send_flags |= IBV_EXP_SEND_SIGNALED;
 		}
 
 		/* set the number of outstanding data WRs for this request. */
@@ -3623,7 +3623,7 @@ _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 
 static void
 _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
-		       struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_send_wr *bad_wr, int rc)
+		       struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_exp_send_wr *bad_wr, int rc)
 {
 	struct spdk_nvmf_rdma_wr	*bad_rdma_wr;
 	struct spdk_nvmf_rdma_request	*prev_rdma_req = NULL, *cur_rdma_req = NULL;
@@ -3631,12 +3631,17 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 	SPDK_ERRLOG("Failed to post a send for the qpair %p with errno %d\n", rqpair, -rc);
 	for (; bad_wr != NULL; bad_wr = bad_wr->next) {
 		bad_rdma_wr = (struct spdk_nvmf_rdma_wr *)bad_wr->wr_id;
+		if (NULL == bad_rdma_wr) {
+			/* @todo: handle signature related WR failure */
+			SPDK_ERRLOG("Signature related WR has failed\n");
+			continue;
+		}
 		assert(rqpair->current_send_depth > 0);
 		rqpair->current_send_depth--;
 		switch (bad_rdma_wr->type) {
 		case RDMA_WR_TYPE_DATA:
 			cur_rdma_req = SPDK_CONTAINEROF(bad_rdma_wr, struct spdk_nvmf_rdma_request, data.rdma_wr);
-			if (bad_wr->opcode == IBV_WR_RDMA_READ) {
+			if (bad_wr->exp_opcode == IBV_EXP_WR_RDMA_READ) {
 				assert(rqpair->current_read_depth > 0);
 				rqpair->current_read_depth--;
 			}
@@ -3687,13 +3692,13 @@ _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 		     struct spdk_nvmf_rdma_poller *rpoller)
 {
 	struct spdk_nvmf_rdma_qpair	*rqpair;
-	struct ibv_send_wr		*bad_wr = NULL;
+	struct ibv_exp_send_wr		*bad_wr = NULL;
 	int				rc;
 
 	while (!STAILQ_EMPTY(&rpoller->qpairs_pending_send)) {
 		rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_send);
 		assert(rqpair->sends_to_post.first != NULL);
-		rc = ibv_post_send(rqpair->qp, rqpair->sends_to_post.first, &bad_wr);
+		rc = ibv_exp_post_send(rqpair->qp, rqpair->sends_to_post.first, &bad_wr);
 
 		/* bad wr always points to the first wr that failed. */
 		if (rc) {
@@ -3764,7 +3769,7 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 			if (spdk_unlikely(rdma_req->dif_insert_or_strip) &&
 			    rdma_req->data.sig_offloaded) {
-				if (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) {
+				if (rdma_req->data.wr.exp_opcode == IBV_EXP_WR_RDMA_WRITE) {
 					/* @todo: handle error
 					 * Pipelining is required to handle this case.
 					 * Without pipelining response is already sent
@@ -3833,7 +3838,7 @@ spdk_nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 				 * completed state since it wasn't linked to a send. However, in the RDMA_WRITE
 				 * case, we should wait for the SEND to complete. */
 				SPDK_ERRLOG("data=%p length=%u\n", rdma_req->req.data, rdma_req->req.length);
-				if (rdma_req->data.wr.opcode == IBV_WR_RDMA_READ) {
+				if (rdma_req->data.wr.exp_opcode == IBV_EXP_WR_RDMA_READ) {
 					rqpair->current_read_depth--;
 					if (rdma_req->num_outstanding_data_wr == 0) {
 						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
