@@ -254,6 +254,9 @@ struct spdk_nvmf_rdma_request_data {
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 	uint32_t			orig_length;
 	bool				sig_offloaded;
+	struct ibv_exp_sig_attrs	sig_attrs;
+	struct ibv_exp_send_wr		reg_wr;
+	struct ibv_exp_send_wr		inv_wr;
 	bool				registered;
 	struct ibv_mr			*sig_mr;
 	struct ibv_sge			sig_sgl;
@@ -676,7 +679,7 @@ nvmf_rdma_request_free_data(struct spdk_nvmf_rdma_request *rdma_req,
 		if (data_wr != &rdma_req->data) {
 			spdk_mempool_put(rtransport->data_wr_pool, data_wr);
 		}
-		data_wr = (!next_send_wr || next_send_wr == &rdma_req->rsp.wr) ? NULL :
+		data_wr = (!next_send_wr || next_send_wr->wr_id != req_wrid) ? NULL :
 			  SPDK_CONTAINEROF(next_send_wr, struct spdk_nvmf_rdma_request_data, wr);
 	}
 }
@@ -1850,50 +1853,42 @@ static int
 spdk_nvmf_rdma_reg_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 {
 	struct spdk_nvmf_rdma_qpair *rqpair;
-	struct ibv_exp_sig_attrs sig_attrs = {};
-	struct ibv_exp_send_wr reg_wr = {};
-	struct ibv_exp_send_wr inv_wr = {};
-	struct ibv_exp_send_wr *wr = &reg_wr;
-	struct ibv_exp_send_wr *bad_wr;
-	int rc;
+	struct ibv_exp_sig_attrs *sig_attrs = &rdma_req->data.sig_attrs;
+	struct ibv_exp_send_wr *wr = &rdma_req->data.reg_wr;
 
-	sig_attrs.check_mask = 0xff;
+	sig_attrs->check_mask = 0xff;
 	/* No signature on wire */
-	sig_attrs.wire.sig_type = IBV_EXP_SIG_TYPE_NONE;
+	sig_attrs->wire.sig_type = IBV_EXP_SIG_TYPE_NONE;
 	/* T10 DIF signature in memory */
-	sig_attrs.mem.sig_type = IBV_EXP_SIG_TYPE_T10_DIF;
-	sig_attrs.mem.sig.dif.bg_type = IBV_EXP_T10DIF_CRC;
-	sig_attrs.mem.sig.dif.pi_interval = rdma_req->dif_ctx.guard_interval;
-	sig_attrs.mem.sig.dif.bg = 0;
-	sig_attrs.mem.sig.dif.app_tag = 0;
-	sig_attrs.mem.sig.dif.ref_tag = rdma_req->dif_ctx.init_ref_tag;
-	sig_attrs.mem.sig.dif.ref_remap = 1;
-	sig_attrs.mem.sig.dif.app_escape = 1;
-	sig_attrs.mem.sig.dif.ref_escape = 1;
-	sig_attrs.mem.sig.dif.apptag_check_mask = rdma_req->dif_ctx.apptag_mask;
+	sig_attrs->mem.sig_type = IBV_EXP_SIG_TYPE_T10_DIF;
+	sig_attrs->mem.sig.dif.bg_type = IBV_EXP_T10DIF_CRC;
+	sig_attrs->mem.sig.dif.pi_interval = rdma_req->dif_ctx.guard_interval;
+	sig_attrs->mem.sig.dif.bg = 0;
+	sig_attrs->mem.sig.dif.app_tag = 0;
+	sig_attrs->mem.sig.dif.ref_tag = rdma_req->dif_ctx.init_ref_tag;
+	sig_attrs->mem.sig.dif.ref_remap = 1;
+	sig_attrs->mem.sig.dif.app_escape = 1;
+	sig_attrs->mem.sig.dif.ref_escape = 1;
+	sig_attrs->mem.sig.dif.apptag_check_mask = rdma_req->dif_ctx.apptag_mask;
 
-	reg_wr.exp_opcode = IBV_EXP_WR_REG_SIG_MR;
-	reg_wr.ext_op.sig_handover.sig_attrs = &sig_attrs;
-	reg_wr.ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
-	reg_wr.ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
-	reg_wr.sg_list = rdma_req->data.sgl;
-	reg_wr.num_sge = rdma_req->req.iovcnt;
+	wr->exp_opcode = IBV_EXP_WR_REG_SIG_MR;
+	wr->ext_op.sig_handover.sig_attrs = sig_attrs;
+	wr->ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
+	wr->ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
+	wr->sg_list = rdma_req->data.sgl;
+	wr->num_sge = rdma_req->req.iovcnt;
+	wr->next = NULL;
 
 	if (rdma_req->data.registered) {
-		inv_wr.exp_opcode = IBV_EXP_WR_LOCAL_INV;
-		inv_wr.ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
-		inv_wr.next = &reg_wr;
-		wr = &inv_wr;
+		wr = &rdma_req->data.inv_wr;
+		wr->exp_opcode = IBV_EXP_WR_LOCAL_INV;
+		wr->ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
+		wr->next = &rdma_req->data.reg_wr;
 	}
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
-	/* @todo: WR should be chained with READ or WRITE and/or queue depth must be checked */
-	rc = ibv_exp_post_send(rqpair->qp, wr, &bad_wr);
-	if (rc) {
-		SPDK_ERRLOG("Failed to post REG_SIG_MR work request, errno %d\n", rc);
-		assert(0);
-		return rc;
-	}
+	/* @todo: queue depth must be checked? */
+	nvmf_rdma_qpair_queue_send_wrs(rqpair, wr);
 	rdma_req->data.registered = true;
 
 	return 0;
