@@ -896,6 +896,8 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 #ifdef SPDK_CONFIG_RDMA_SIG_OFFLOAD
 		if (opts->device->exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_SIGNATURE_HANDOVER) {
 			struct ibv_exp_create_mr_in sig_mr_in = {};
+			struct ibv_exp_sig_attrs *sig_attrs;
+			struct ibv_exp_send_wr *wr;
 
 			sig_mr_in.pd = opts->pd;
 			sig_mr_in.attr.max_klm_list_size = 1;
@@ -908,6 +910,32 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 			}
 			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Created Signature offload MR #%u: %p\n",
 				      i, rdma_req->data.sig_mr);
+
+			/* Initialize constant signature properties */
+			sig_attrs = &rdma_req->data.sig_attrs;
+			sig_attrs->check_mask = 0xff;
+			/* No signature on wire */
+			sig_attrs->wire.sig_type = IBV_EXP_SIG_TYPE_NONE;
+			/* T10 DIF signature in memory */
+			sig_attrs->mem.sig_type = IBV_EXP_SIG_TYPE_T10_DIF;
+			sig_attrs->mem.sig.dif.bg_type = IBV_EXP_T10DIF_CRC;
+			sig_attrs->mem.sig.dif.bg = 0;
+			sig_attrs->mem.sig.dif.app_tag = 0;
+			sig_attrs->mem.sig.dif.ref_remap = 1;
+			sig_attrs->mem.sig.dif.app_escape = 1;
+			sig_attrs->mem.sig.dif.ref_escape = 1;
+
+			wr = &rdma_req->data.reg_wr;
+			wr->exp_opcode = IBV_EXP_WR_REG_SIG_MR;
+			wr->ext_op.sig_handover.sig_attrs = sig_attrs;
+			wr->ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
+			wr->ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
+			wr->sg_list = rdma_req->data.sgl;
+
+			wr = &rdma_req->data.inv_wr;
+			wr->exp_opcode = IBV_EXP_WR_LOCAL_INV;
+			wr->ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
+			wr->next = &rdma_req->data.reg_wr;
 		}
 #endif
 
@@ -1856,33 +1884,15 @@ spdk_nvmf_rdma_reg_sig_mr(struct spdk_nvmf_rdma_request *rdma_req)
 	struct ibv_exp_sig_attrs *sig_attrs = &rdma_req->data.sig_attrs;
 	struct ibv_exp_send_wr *wr = &rdma_req->data.reg_wr;
 
-	sig_attrs->check_mask = 0xff;
-	/* No signature on wire */
-	sig_attrs->wire.sig_type = IBV_EXP_SIG_TYPE_NONE;
-	/* T10 DIF signature in memory */
-	sig_attrs->mem.sig_type = IBV_EXP_SIG_TYPE_T10_DIF;
-	sig_attrs->mem.sig.dif.bg_type = IBV_EXP_T10DIF_CRC;
 	sig_attrs->mem.sig.dif.pi_interval = rdma_req->dif_ctx.guard_interval;
-	sig_attrs->mem.sig.dif.bg = 0;
-	sig_attrs->mem.sig.dif.app_tag = 0;
 	sig_attrs->mem.sig.dif.ref_tag = rdma_req->dif_ctx.init_ref_tag;
-	sig_attrs->mem.sig.dif.ref_remap = 1;
-	sig_attrs->mem.sig.dif.app_escape = 1;
-	sig_attrs->mem.sig.dif.ref_escape = 1;
 	sig_attrs->mem.sig.dif.apptag_check_mask = rdma_req->dif_ctx.apptag_mask;
 
-	wr->exp_opcode = IBV_EXP_WR_REG_SIG_MR;
-	wr->ext_op.sig_handover.sig_attrs = sig_attrs;
-	wr->ext_op.sig_handover.sig_mr = rdma_req->data.sig_mr;
-	wr->ext_op.sig_handover.access_flags = IBV_ACCESS_LOCAL_WRITE;
-	wr->sg_list = rdma_req->data.sgl;
 	wr->num_sge = rdma_req->req.iovcnt;
 	wr->next = NULL;
 
 	if (rdma_req->data.registered) {
 		wr = &rdma_req->data.inv_wr;
-		wr->exp_opcode = IBV_EXP_WR_LOCAL_INV;
-		wr->ex.invalidate_rkey = rdma_req->data.sig_mr->rkey;
 		wr->next = &rdma_req->data.reg_wr;
 	}
 
