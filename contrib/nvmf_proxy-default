@@ -3,7 +3,7 @@
 # contains environment variables for /etc/systemd/system/nvmf_tgt.service
 
 # run on 4 cores out of 8 on SNIC
-CPU_MASK=0xf0
+CPU_MASK=0xaa
 # default config file
 NVMF_TGT_CONF=/etc/spdk/nvmf_proxy.conf
 
