@@ -471,7 +471,7 @@ nvme_submit_io(struct perf_task *task, struct ns_worker_ctx *ns_ctx,
 
 	lba = offset_in_ios * entry->io_size_blocks;
 
-	if (entry->md_size != 0 && !(entry->io_flags & SPDK_NVME_IO_FLAGS_PRACT)) {
+	if (entry->md_size != 0) {
 		if (entry->md_interleave) {
 			mode = DIF_MODE_DIF;
 		} else {
@@ -504,26 +504,27 @@ nvme_submit_io(struct perf_task *task, struct ns_worker_ctx *ns_ctx,
 						     task, entry->io_flags,
 						     task->dif_ctx.apptag_mask, task->dif_ctx.app_tag);
 	} else {
-		switch (mode) {
-		case DIF_MODE_DIF:
-			rc = spdk_dif_generate(&task->iov, 1, entry->io_size_blocks, &task->dif_ctx);
-			if (rc != 0) {
-				fprintf(stderr, "Generation of DIF failed\n");
-				return rc;
+		if (!(entry->io_flags & SPDK_NVME_IO_FLAGS_PRACT)) {
+			switch (mode) {
+			case DIF_MODE_DIF:
+				rc = spdk_dif_generate(&task->iov, 1, entry->io_size_blocks, &task->dif_ctx);
+				if (rc != 0) {
+					fprintf(stderr, "Generation of DIF failed\n");
+					return rc;
+				}
+				break;
+			case DIF_MODE_DIX:
+				rc = spdk_dix_generate(&task->iov, 1, &task->md_iov, entry->io_size_blocks,
+						       &task->dif_ctx);
+				if (rc != 0) {
+					fprintf(stderr, "Generation of DIX failed\n");
+					return rc;
+				}
+				break;
+			default:
+				break;
 			}
-			break;
-		case DIF_MODE_DIX:
-			rc = spdk_dix_generate(&task->iov, 1, &task->md_iov, entry->io_size_blocks,
-					       &task->dif_ctx);
-			if (rc != 0) {
-				fprintf(stderr, "Generation of DIX failed\n");
-				return rc;
-			}
-			break;
-		default:
-			break;
 		}
-
 		return spdk_nvme_ns_cmd_write_with_md(entry->u.nvme.ns, ns_ctx->u.nvme.qpair[qp_num],
 						      task->iov.iov_base, task->md_iov.iov_base,
 						      lba,
@@ -1499,7 +1500,7 @@ parse_metadata(const char *metacfg_str)
 
 		if (strcmp(key, "PRACT") == 0) {
 			if (*val == '1') {
-				g_metacfg_prchk_flags = SPDK_NVME_IO_FLAGS_PRACT;
+				g_metacfg_pract_flag = SPDK_NVME_IO_FLAGS_PRACT;
 			}
 		} else if (strcmp(key, "PRCHK") == 0) {
 			if (strstr(val, "GUARD") != NULL) {
