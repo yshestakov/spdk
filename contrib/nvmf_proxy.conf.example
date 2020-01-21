@@ -3,9 +3,15 @@
 
 [Transport]
   Type RDMA
-  MaxQueueDepth 256
+  MaxQueueDepth  64
   # number of queues in emulation configuration (JSON file) plus 2
   MaxQueuesPerSession 34
+  IOUnitSize  4096
+  MaxIOSize  8192
+  InCapsuleDataSize  4096
+  NumSharedBuffers  2048
+  BufCacheSize  64
+  MaxSRQDepth  32
 
 [Transport]
   Type TCP
@@ -18,6 +24,15 @@
 ## Dev <name> <size_in_MiB> <block_size>
 #  Dev Nullb0 8388608 512
 #  Dev Nullb1 8388608 512
+[Null]
+  Dev Null0 1000000 4096
+  Dev Null1 1000000 4096
+  Dev Null2 10000   4096
+  Dev Null3 1000000 4096
+  Dev Null4 30000   4096
+  Dev Null5 1000000 4096
+  Dev Null6 1000000 4096
+  Dev Null7 1000000 4096
 
 [Nvme]
   RetryCount 4
