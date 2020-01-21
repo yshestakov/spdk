@@ -1,6 +1,6 @@
 # Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
 
-%define scm_version 19.07
+%define scm_version 20.01
 %define unmangled_version %{scm_version}
 %if "%{?_rev:1}" == ""
 %define scm_rev 1

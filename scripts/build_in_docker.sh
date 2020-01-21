@@ -8,8 +8,8 @@
 # IMGID=centos75-nvme-snap-2.0
 IMGID=builder-spdk1907-snap2
 docker run  \
-    --name build-spdk1907 \
-    -e "VER=19.07" -e "BUILD_NUMBER=${BUILD_NUMBER:-1}" \
+    --name build-spdk2001 \
+    -e "VER=20.01" -e "BUILD_NUMBER=${BUILD_NUMBER:-1}" \
     -v ~/rpmbuild:/rpmbuild \
     -v `pwd`:/scratch         \
     --rm -i         \
