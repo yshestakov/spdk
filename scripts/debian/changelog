@@ -1,0 +1,5 @@
+spdk-rpc (20.01-1) unstable; urgency=medium
+
+  * Initial release based on master @ 87dcedb
+
+ -- Yurii Shestakov <yuriis@mellanox.com>  Sat, 25 Jan 2020 21:11:40 +0000
