@@ -34,12 +34,12 @@ Source4:	spdk-ocf-%{version}.tar.gz
 # Distros that don't support python3 will use python2
 %if "%{dist}" == ".el7" || "%{dist}" == ".el7.centos" || "%{dist}" == ".el7.centos.a"
 # So, let's switch to Python36 from IUS repo - https://github.com/iusrepo/python36
-  %define use_python python3.6
-  %define python_ver 3.6
+%define use_python python3.6
+%define python_ver 3.6
 %else
-  # on Fedora 28+ we have python3 == 3.7
-  %define use_python python3
-  %define python_ver 3.7
+# on Fedora 28+ we have python3 == 3.7
+%define use_python python3
+%define python_ver 3.7
 %endif
 
 ExclusiveArch: x86_64 aarch64
@@ -70,7 +70,6 @@ BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires:	libiscsi-devel
 BuildRequires:  lcov, clang-analyzer
 # Additional dependencies for SPDK CLI 
-BuildRequires:	python3-pep8 python3-configshell
 # Additional dependencies for NVMe over Fabrics
 BuildRequires:	libibverbs-devel, librdmacm-devel
 # Additional dependencies for building docs
@@ -96,10 +95,11 @@ Requires:	librdmacm
 Requires:	sg3_utils
 # Requires:	avahi
 Requires:   libhugetlbfs-utils
-%if "%{use_python}" == "python36"
-  Requires: %{name}%{?_isa} = %{package_version} python36 
+%if "%{use_python}" == "python3.6"
+Requires: %{name}%{?_isa} = %{package_version} python36 
 %else
-  Requires: %{name}%{?_isa} = %{package_version} python3 python3-configshell python3-pexpect
+Requires: %{name}%{?_isa} = %{package_version} python3 python3-configshell python3-pexpect
+BuildRequires:	python3-pep8 python3-configshell
 %endif
 
 %description
@@ -122,7 +122,7 @@ sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="/usr"#' CONFIG
 ./configure \
 	--prefix=/usr \
 	--disable-coverage \
-         --enable-debug \
+	--enable-debug \
 	--disable-tests \
 	--without-crypto \
 	--without-fio \
@@ -180,10 +180,10 @@ for fn in nvmf_tgt vhost spdk_tgt ; do
   fi
 done
 # Install SPDK rpc services
-if [ -e %{_libdir}/python%{python_ver} ] ; then
-    mkdir -p %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/rpc/
-    install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/rpc/
-fi
+for mod in rpc spdkcli ; do
+    mkdir -p %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/$mod/
+    install -p -m 644 scripts/$mod/* %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/$mod/
+done
 install -p -m 755 scripts/rpc.py %{install_bindir}/spdk_rpc.py
 sed -i -e 's!/usr/bin/env python3$!/usr/bin/python'%{python_ver}'!' %{install_bindir}/spdk_rpc.py
 
