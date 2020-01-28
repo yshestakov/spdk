@@ -1,0 +1,5 @@
+spdk-dbgsym_20.01-1_arm64.ddeb debug optional
+spdk-dev_20.01-1_arm64.deb net optional
+spdk-rpc_20.01-1_arm64.deb net optional
+spdk_20.01-1_arm64.buildinfo net optional
+spdk_20.01-1_arm64.deb net optional

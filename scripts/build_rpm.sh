@@ -6,7 +6,7 @@ cd $wdir
 mkdir -p $HOME/rpmbuild/{SOURCES,RPMS,SRPMS,SPECS,BUILD,BUILDROOT}
 set -e
 if [ -z "$VER" ] ; then
-    export VER=19.04
+    export VER=20.01
 fi
 branch=$(git rev-parse --abbrev-ref HEAD)
 sha1=$(git rev-parse HEAD |cut -c -8)
@@ -49,14 +49,13 @@ fakeroot  \
     --define "_sha1 ${sha1}" $args \
     scripts/spdk.spec 
 
-chown 0.0  ~/rpmbuild/SOURCES/spdk-*-$VER.tar.gz
-ls -l ~/rpmbuild/SOURCES/*
-# just a workaround for missed *-source repos:
-fgrep -l vault.centos /etc/yum.repos.d/*.repo |while read fn ; do mv $fn /tmp/ ; done
-#--disablerepo=extras-source --disablerepo=centosplus-source \
-#--disablerepo=base-source \
-#
-yum-builddep -y scripts/spdk.spec
+if [ "$UID" -eq 0 ] ; then
+   chown 0.0  ~/rpmbuild/SOURCES/spdk-*-$VER.tar.gz
+   # ls -l ~/rpmbuild/SOURCES/*
+   # just a workaround for missed *-source repos:
+   fgrep -l vault.centos /etc/yum.repos.d/*.repo |while read fn ; do mv $fn /tmp/ ; done
+   yum-builddep -y scripts/spdk.spec
+fi
 rpmbuild -bb \
     -D "_version ${VER}" -D "_rev ${BUILD_NUMBER:-1}" \
     --define "_branch ${branch}" \
