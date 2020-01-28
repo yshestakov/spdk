@@ -69,7 +69,6 @@ BuildRequires:	git make gcc gcc-c++
 BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel 
 BuildRequires:	libiscsi-devel
 BuildRequires:  lcov, clang-analyzer
-# Additional dependencies for SPDK CLI 
 # Additional dependencies for NVMe over Fabrics
 BuildRequires:	libibverbs-devel, librdmacm-devel
 # Additional dependencies for building docs
@@ -99,6 +98,7 @@ Requires:   libhugetlbfs-utils
 Requires: %{name}%{?_isa} = %{package_version} python36 
 %else
 Requires: %{name}%{?_isa} = %{package_version} python3 python3-configshell python3-pexpect
+# Additional dependencies for SPDK CLI 
 BuildRequires:	python3-pep8 python3-configshell
 %endif
 
