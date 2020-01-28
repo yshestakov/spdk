@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2019, Mellanox Technologies. All rights reserved.
+# Copyright (c) 2018-2020, Mellanox Technologies. All rights reserved.
 
 %define scm_version 20.01
 %define unmangled_version %{scm_version}
@@ -30,14 +30,19 @@ Source4:	spdk-ocf-%{version}.tar.gz
 %define install_bindir %{buildroot}/%{_bindir}
 %define install_docdir %{buildroot}/%{_docdir}/%{name}
 
+# It is somewhat hard to get SPDK RPC working with python 2.7
 # Distros that don't support python3 will use python2
 %if "%{dist}" == ".el7" || "%{dist}" == ".el7.centos" || "%{dist}" == ".el7.centos.a"
-%define use_python2 1
+# So, let's switch to Python36 from IUS repo - https://github.com/iusrepo/python36
+  %define use_python python3.6
+  %define python_ver 3.6
 %else
-%define use_python2 0
+  # on Fedora 28+ we have python3 == 3.7
+  %define use_python python3
+  %define python_ver 3.7
 %endif
 
-ExclusiveArch: i686 x86_64 aarch64
+ExclusiveArch: x86_64 aarch64
 %ifarch aarch64
 %global machine armv8a
 %global target arm64-%{machine}-linuxapp-gcc
@@ -55,7 +60,7 @@ BuildRequires: kernel-headers
 # - BuildRequires: libpcap-devel, python-sphinx, inkscape
 # - BuildRequires: texlive-collection-latexextra
 BuildRequires: doxygen
-BuildRequires:graphviz
+BuildRequires: graphviz
 BuildRequires: numactl-devel
 BuildRequires: libiscsi-devel
 
@@ -65,11 +70,7 @@ BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires:	libiscsi-devel
 BuildRequires:  lcov, clang-analyzer
 # Additional dependencies for SPDK CLI 
-%if "%{use_python2}" == "0"
 BuildRequires:	python3-pep8 python3-configshell
-%else
-BuildRequires:	python-pep8 python-configshell
-%endif
 # Additional dependencies for NVMe over Fabrics
 BuildRequires:	libibverbs-devel, librdmacm-devel
 # Additional dependencies for building docs
@@ -81,6 +82,10 @@ BuildRequires:	libibverbs-devel, librdmacm-devel
 # BuildRequires:	libpmemblk-devel
 %endif
 
+# Build python36 from IUS repo and install on CentOS/7
+# -- https://github.com/iusrepo/python36/blob/master/python36.spec
+Requires: python36
+
 # SPDK runtime dependencies
 #Requires:	libibverbs >= 41mlnx1-OFED.4.4
 #Requires:	librdmacm  >= 41mlnx1-OFED.4.2
@@ -91,10 +96,10 @@ Requires:	librdmacm
 Requires:	sg3_utils
 # Requires:	avahi
 Requires:   libhugetlbfs-utils
-%if "%{use_python2}" == "0"
-Requires: %{name}%{?_isa} = %{package_version} python3 python3-configshell python3-pexpect
+%if "%{use_python}" == "python36"
+  Requires: %{name}%{?_isa} = %{package_version} python36 
 %else
-Requires: %{name}%{?_isa} = %{package_version} python python-configshell 
+  Requires: %{name}%{?_isa} = %{package_version} python3 python3-configshell python3-pexpect
 %endif
 
 %description
@@ -113,10 +118,11 @@ tar zxf %{SOURCE4}
 # test -e ./dpdk/config/common_linuxapp
 
 %build
+sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="/usr"#' CONFIG
 ./configure \
 	--prefix=/usr \
 	--disable-coverage \
-    --enable-debug \
+         --enable-debug \
 	--disable-tests \
 	--without-crypto \
 	--without-fio \
@@ -142,7 +148,12 @@ install -p -m 755 app/vhost/vhost %{install_sbindir}
 install -p -m 755 app/iscsi_tgt/iscsi_tgt %{install_sbindir}
 install -p -m 755 app/iscsi_top/iscsi_top %{install_bindir}
 install -p -m 755 app/trace/spdk_trace %{install_bindir}
+install -p -m 755 app/spdk_lspci/spdk_lspci %{install_bindir}
+install -p -m 755 app/trace_record/spdk_trace_record %{install_bindir}
 install -p -m 755 examples/nvme/perf/perf %{install_sbindir}/nvme-perf
+install -p -m 755 examples/nvme/identify/identify %{install_sbindir}/nvme-identify
+install -p -m 755 examples/nvme/nvme_manage/nvme_manage %{install_sbindir}/
+install -p -m 755 examples/blob/cli/blobcli %{install_sbindir}/
 install -p -m 755 contrib/setup_nvmf_tgt.py %{install_sbindir}
 install -p -m 755 contrib/setup_vhost.py %{install_sbindir}
 install -p -m 755 contrib/vhost_add_config.sh %{install_sbindir}
@@ -155,9 +166,9 @@ mkdir -p %{install_datadir}
 install -p -m 644 include/spdk/pci_ids.h %{install_datadir}
 install -p -m 644 scripts/common.sh %{install_datadir}
 install -p -m 755 scripts/setup.sh %{install_datadir}
-install -p -m 755 contrib/arp_fixup.sh %{install_sbindir}
+# install -p -m 755 contrib/arp_fixup.sh %{install_sbindir}
 
-for fn in nvmf_tgt vhost nvmf_proxy ; do
+for fn in nvmf_tgt vhost spdk_tgt ; do
   if [ -e contrib/$fn.service ] ; then
     install -p -m 644 contrib/$fn.service ${systemd_dir}
   fi
@@ -169,20 +180,12 @@ for fn in nvmf_tgt vhost nvmf_proxy ; do
   fi
 done
 # Install SPDK rpc services
-%if "%{use_python2}" == "0"
-  if [ -e %{_libdir}/python3.7 ] ; then
-    mkdir -p %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
-    install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python3.7/site-packages/rpc/
-  fi
-  install -p -m 755 scripts/rpc.py %{install_bindir}/spdk_rpc.py
-%else
-  mkdir -p %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
-  install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python2.7/site-packages/rpc/
-  install -p -m 755 scripts/rpc_py2.py %{install_bindir}/spdk_rpc.py
-  # sed -i -e 's!/usr/bin/env python3$!/usr/bin/env python2!' %{install_bindir}/spdk_rpc.py
-%endif
-# mkdir -p %{buildroot}/%{_sysconfdir}/avahi/services/
-# install -p -m 644 contrib/avahi-spdk.service %{buildroot}/%{_sysconfdir}/avahi/services/spdk.service
+if [ -e %{_libdir}/python%{python_ver} ] ; then
+    mkdir -p %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/rpc/
+    install -p -m 644 scripts/rpc/* %{buildroot}/%{_libdir}/python%{python_ver}/site-packages/rpc/
+fi
+install -p -m 755 scripts/rpc.py %{install_bindir}/spdk_rpc.py
+sed -i -e 's!/usr/bin/env python3$!/usr/bin/python'%{python_ver}'!' %{install_bindir}/spdk_rpc.py
 
 %files
 %{_sbindir}/*
@@ -207,6 +210,9 @@ case "$1" in
 esac
 
 %changelog
+* Tue Jan 28 2020 Yuriy Shestakov <yuriis@mellanox.com>
+- ported to v20.01 pre-release
+
 * Wed Aug  7 2019 Yuriy Shestakov <yuriis@mellanox.com>
 - ported to v19.07 release
 
