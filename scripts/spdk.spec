@@ -9,6 +9,9 @@
 %endif
 Epoch: 0
 
+%define pkg_prefix /opt/mellanox/snap
+# %define __global_ldflags '-Wl,-rpath,'%{pkg_prefix}'/lib'
+
 Name:		spdk
 Version:	%{scm_version}
 Release:	%{scm_rev}%{?dist}
@@ -121,9 +124,11 @@ tar zxf %{SOURCE4}
 # test -e ./dpdk/config/common_linuxapp
 
 %build
-sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="/usr"#' CONFIG
+sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="'%{pkg_prefix}'"#' CONFIG
+LDFLAGS="$LDFLAGS -Wl,-rpath,%{pkg_prefix}/lib"
+export LDFLAGS
 ./configure \
-	--prefix=/usr \
+	--prefix=%{pkg_prefix} \
 	--disable-coverage \
 	--enable-debug \
 	--disable-tests \
@@ -135,8 +140,7 @@ sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="/usr"#' CONFIG
 	--without-rbd \
 	--with-rdma \
 	--without-vtune \
-	--with-shared \
-    --prefix=/opt/mellanox/snap
+	--with-shared
 	# --with-iscsi-initiator
 # SPDK make
 make %{?_smp_mflags}
@@ -170,10 +174,10 @@ mkdir -p %{install_datadir}
 install -p -m 644 include/spdk/pci_ids.h %{install_datadir}
 install -p -m 644 scripts/common.sh %{install_datadir}
 install -p -m 755 scripts/setup.sh %{install_datadir}
-make -C dpdk install prefix=${RPM_BUILD_ROOT}/opt/mellanox/snap
-rm -rf ${RPM_BUILD_ROOT}/opt/mellanox/snap/share/dpdk/examples
-cp -pr include/spdk ${RPM_BUILD_ROOT}/opt/mellanox/snap/include/
-cp -pr build/lib/*.*    ${RPM_BUILD_ROOT}/opt/mellanox/snap/lib/
+make -C dpdk install prefix=${RPM_BUILD_ROOT}%{pkg_prefix}
+rm -rf ${RPM_BUILD_ROOT}%{pkg_prefix}/share/dpdk/examples
+cp -pr include/spdk ${RPM_BUILD_ROOT}%{pkg_prefix}/include/
+cp -pr build/lib/*.*    ${RPM_BUILD_ROOT}%{pkg_prefix}/lib/
 
 for fn in nvmf_tgt vhost spdk_tgt ; do
   if [ -e contrib/$fn.service ] ; then
@@ -204,7 +208,7 @@ sed -i -e 's!/usr/bin/env python3$!/usr/bin/python'%{python_ver}'!' %{install_bi
 %config(noreplace) %{_sysconfdir}/spdk/*
 %doc README.md LICENSE
 # %files -n dev
-/opt/mellanox/snap/*
+%{pkg_prefix}/*
 
 %post
 case "$1" in
