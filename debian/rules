@@ -5,6 +5,7 @@ export DH_VERBOSE = 1
 SYSTEMD_DIR=/usr/lib/systemd/system
 DEFAULTS_DIR=/etc/default
 SPDK_CONF_DIR=/etc/spdk
+pkg_prefix=/opt/mellanox/snap
 
 
 # see FEATURE AREAS in dpkg-buildflags(1)
@@ -29,7 +30,23 @@ override_dh_auto_configure:
 	# for some reason ./configure -- --options are ignored
 	# so that let's use preconfigure debian/CONFIG on Ubuntu
 	cp -p debian/CONFIG CONFIG
-	./configure
+	sed -i 's#CONFIG_PREFIX="/usr/local"#CONFIG_PREFIX="'$(pkg_prefix)'"#' CONFIG
+	LDFLAGS="\$LDFLAGS -Wl,-rpath,$(pkg_prefix)/lib"
+	export LDFLAGS
+	./configure \
+		--prefix=$(pkg_prefix) \
+		--disable-coverage \
+		--enable-debug \
+		--disable-tests \
+		--without-crypto \
+		--without-fio \
+		--with-vhost \
+		--without-pmdk \
+		--without-vpp \
+		--without-rbd \
+		--with-rdma \
+		--without-vtune \
+		--with-shared
 
 override_dh_auto_clean:
 	test -e mk/config.mk && make distclean || true
