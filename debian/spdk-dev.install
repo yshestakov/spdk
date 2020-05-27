@@ -1,2 +1,2 @@
-usr/include/spdk/* usr/include
-usr/lib/*.a usr/lib
+opt/mellanox/snap/lib/*.a opt/mellanox/snap/lib
+opt/mellanox/snap/include/* opt/mellanox/snap/include
